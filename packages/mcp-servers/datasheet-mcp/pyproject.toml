@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "datasheet-mcp"
+version = "0.1.0"
+description = "RAG Knowledge Base MCP Server (datasheets, protocols, IP interfaces)"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "pydantic>=2.6.0",
+    "llama-index-core>=0.10.0",
+    "qdrant-client>=1.9.0",
+    "llama-index-vector-stores-qdrant>=0.2.0",
+    "openai>=1.20.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "ruff>=0.4.0"]
+
+[project.scripts]
+datasheet-mcp = "datasheet_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/datasheet_mcp"]

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yosys-mcp"
+version = "0.1.0"
+description = "Yosys/nextpnr open-source FPGA toolchain MCP server"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+yosys-mcp = "yosys_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yosys_mcp"]

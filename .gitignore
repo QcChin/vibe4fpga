@@ -1,0 +1,53 @@
+# Node.js
+node_modules/
+out/
+dist/
+*.vsix
+.vscode-test/
+.npm/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+.uv/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+*.js.map
+*.d.ts.map
+
+# Test / coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Vector DB storage
+qdrant_storage/
+
+# Secrets
+*.env.local
+.env.*.local
