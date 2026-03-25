@@ -2,22 +2,42 @@
 
 from __future__ import annotations
 
+import re
+from functools import lru_cache
+from pathlib import Path
+
 from mcp.server.fastmcp import FastMCP
 
 from .axi_decoder import decode_axi
-from .compressor import compress_for_llm
+from .compressor import compress_for_llm, l1_compress_all, l1_sample
 from .parser import parse_waveform
 
 mcp = FastMCP("waveform-mcp")
 
-# Module-level cache: avoid re-parsing the same file repeatedly
-_CACHE: dict[str, object] = {}
+# LRU cache: holds at most 8 parsed waveforms (large VCDs can be hundreds of MB)
+_CACHE_MAX = 8
+_cache: dict[str, object] = {}
+_cache_order: list[str] = []   # LRU eviction order
 
 
 def _load(file_path: str):
-    if file_path not in _CACHE:
-        _CACHE[file_path] = parse_waveform(file_path)
-    return _CACHE[file_path]
+    """Load and cache a waveform file with LRU eviction."""
+    if file_path in _cache:
+        # Move to front (most recently used)
+        _cache_order.remove(file_path)
+        _cache_order.append(file_path)
+        return _cache[file_path]
+
+    meta = parse_waveform(file_path)
+    _cache[file_path] = meta
+    _cache_order.append(file_path)
+
+    # Evict oldest entry if over limit
+    if len(_cache_order) > _CACHE_MAX:
+        evict = _cache_order.pop(0)
+        _cache.pop(evict, None)
+
+    return meta
 
 
 @mcp.tool()
@@ -30,8 +50,13 @@ async def parse_waveform_tool(file_path: str) -> dict:
     Returns:
         {format, duration_ns, signal_count, clocks, signals}
     """
-    meta = _load(file_path)
-    return meta.to_summary()
+    try:
+        meta = _load(file_path)
+        return meta.to_summary()
+    except FileNotFoundError:
+        return {"error": f"File not found: {file_path}"}
+    except Exception as exc:
+        return {"error": f"Failed to parse waveform: {exc}"}
 
 
 @mcp.tool()
@@ -52,21 +77,21 @@ async def extract_signal_events(
     Returns:
         {signal_name: [{time: float, value: str}]}
     """
-    from .compressor import l1_sample
+    try:
+        meta = _load(file_path)
+    except Exception as exc:
+        return {"error": f"Failed to load waveform: {exc}"}  # type: ignore[return-value]
 
-    meta = _load(file_path)
     result: dict[str, list[dict]] = {}
-
     for name in signals:
         sig = meta.signals.get(name)
         if sig is None:
             result[name] = []
             continue
 
-        # Filter to time window
         tv = sig.tv
         if time_start_ns > 0 or time_end_ns is not None:
-            end = time_end_ns or float("inf")
+            end = time_end_ns if time_end_ns is not None else float("inf")
             tv = [(t, v) for t, v in tv if time_start_ns <= t <= end]
 
         result[name] = l1_sample(tv)
@@ -94,25 +119,32 @@ async def decode_axi_tool(
     Returns:
         {transactions, violations, summary}
     """
-    from .compressor import l1_compress_all
+    try:
+        meta = _load(file_path)
+    except Exception as exc:
+        return {"error": f"Failed to load waveform: {exc}"}
 
-    meta = _load(file_path)
-
-    # Filter signals matching the prefix
     relevant = {
         name: sig
         for name, sig in meta.signals.items()
         if name.startswith(axi_prefix) or (clock_name and name == clock_name)
     }
 
-    # Apply time window filter
+    # Work on copies to avoid mutating the cached WaveformMetadata objects
     if time_start_ns > 0 or time_end_ns is not None:
-        end = time_end_ns or float("inf")
-        for sig in relevant.values():
-            sig.tv = [(t, v) for t, v in sig.tv if time_start_ns <= t <= end]
+        end = time_end_ns if time_end_ns is not None else float("inf")
+        relevant = {
+            name: type(sig)(  # type: ignore[call-arg]
+                name=sig.name,
+                tv=[(t, v) for t, v in sig.tv if time_start_ns <= t <= end],
+                width=getattr(sig, "width", 1),
+            )
+            for name, sig in relevant.items()
+        }
 
     compressed = l1_compress_all(relevant)
-    return decode_axi(compressed, axi_prefix=axi_prefix, clock_name=clock_name, timeout_cycles=timeout_cycles)
+    return decode_axi(compressed, axi_prefix=axi_prefix, clock_name=clock_name,
+                      timeout_cycles=timeout_cycles)
 
 
 @mcp.tool()
@@ -131,10 +163,12 @@ async def summarize_for_llm(
     Returns:
         {metadata_summary, clock_summaries, event_narrative, anomaly_count}
     """
-    meta = _load(file_path)
-    result = compress_for_llm(meta.signals, query=query, token_budget=token_budget)
+    try:
+        meta = _load(file_path)
+    except Exception as exc:
+        return {"error": f"Failed to load waveform: {exc}"}
 
-    # Remove raw signal_events from output (too large), just keep narrative
+    result = compress_for_llm(meta.signals, query=query, token_budget=token_budget)
     return {
         "metadata_summary": result["metadata_summary"],
         "clock_summaries":  result["clock_summaries"],
@@ -151,28 +185,26 @@ async def map_signal_to_rtl(
     """Reverse-map a simulation signal name to its RTL source location.
 
     For pre-synthesis (RTL) simulation: searches RTL files for signal declaration.
-    Post-synthesis mapping requires netlist parsing (Phase 3).
 
     Args:
         waveform_path: Path to the waveform file.
         signal_name:   Fully-qualified simulation signal name.
         rtl_root:      Optional RTL project root for source search.
     """
-    import re
-    from pathlib import Path
-
     if not rtl_root:
         return {"status": "no_rtl_root", "signal": signal_name}
 
-    # Strip scope prefix to get base signal name
     base_name = signal_name.rsplit(".", 1)[-1]
     pattern = re.compile(rf"\b{re.escape(base_name)}\b")
+    max_file_bytes = 512 * 1024   # skip files > 512 KB to avoid reading huge netlists
 
     hits: list[dict] = []
     for fp in Path(rtl_root).rglob("*"):
         if fp.suffix.lower() not in {".v", ".sv"}:
             continue
         try:
+            if fp.stat().st_size > max_file_bytes:
+                continue
             for line_no, line in enumerate(fp.read_text(errors="replace").splitlines(), 1):
                 if pattern.search(line):
                     hits.append({
@@ -188,10 +220,10 @@ async def map_signal_to_rtl(
             break
 
     return {
-        "signal":       signal_name,
-        "base_name":    base_name,
-        "rtl_hits":     hits,
-        "status":       "found" if hits else "not_found",
+        "signal":    signal_name,
+        "base_name": base_name,
+        "rtl_hits":  hits,
+        "status":    "found" if hits else "not_found",
     }
 
 

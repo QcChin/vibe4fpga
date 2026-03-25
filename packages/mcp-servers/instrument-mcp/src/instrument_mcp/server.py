@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+
+import numpy as np
 from mcp.server.fastmcp import FastMCP
 
 from .aligner import compute_fft, cross_correlate_align
 from .readers.generic import read_csv_auto
 from .readers.rigol import read_rigol_csv
 from .readers.scpi import capture_waveform, connect, list_instruments
+
+logger = logging.getLogger(__name__)
 
 mcp = FastMCP("instrument-mcp")
 
@@ -182,6 +187,94 @@ async def align_with_simulation(
 
 
 @mcp.tool()
+# ── Private difference detectors (one per category) ──────────────────────────
+
+def _detect_rise_time_overshoot(diff, sim, rms_diff: float) -> dict | None:
+    """Detect overshoot / rise-time mismatch at signal edges (expected)."""
+    sim_edges = np.where(np.abs(np.diff(sim)) > 0.4)[0]
+    if len(sim_edges) == 0:
+        return None
+    edge_diffs = [abs(diff[i]) for i in sim_edges if i < len(diff)]
+    if edge_diffs and max(edge_diffs) > rms_diff * 2:
+        return {
+            "diff_type":      "rise_time_overshoot",
+            "classification": "expected",
+            "evidence":       f"Large diff ({max(edge_diffs):.3f}) at {len(sim_edges)} edge(s); near-zero in stable regions",
+            "suggestion":     "RTL correct — physical effect. Consider adjusting DRIVE strength or output impedance.",
+        }
+    return None
+
+
+def _detect_dc_offset(diff, rms_diff: float) -> dict | None:
+    """Detect systematic DC / amplitude offset (suspicious or anomalous)."""
+    dc_offset = float(np.mean(diff))
+    if abs(dc_offset) > rms_diff * 0.5:
+        return {
+            "diff_type":      "amplitude_error" if abs(dc_offset) > 0.1 else "dc_offset",
+            "classification": "anomalous" if abs(dc_offset) > 0.1 else "suspicious",
+            "evidence":       f"Mean diff = {dc_offset:.4f} (systematic amplitude offset)",
+            "suggestion":     "Check data path bit-width, truncation, or shift operations (e.g. >> mismatch).",
+        }
+    return None
+
+
+def _detect_hf_noise(t, diff, clock_period_ns: float) -> dict | None:
+    """Detect high-frequency noise / EMI overlay (expected)."""
+    fft_result = compute_fft(list(t), list(diff), n_points=512)
+    if "dominant_freq_mhz" not in fft_result:
+        return None
+    dom_freq = fft_result["dominant_freq_mhz"]
+    clock_freq_mhz = 1000.0 / clock_period_ns if clock_period_ns > 0 else 100.0
+    if dom_freq > clock_freq_mhz * 5:
+        return {
+            "diff_type":      "hf_noise_emi",
+            "classification": "expected",
+            "evidence":       f"Dominant diff frequency {dom_freq:.1f} MHz >> clock ({clock_freq_mhz:.1f} MHz)",
+            "suggestion":     "PCB routing or power supply issue — not an RTL problem.",
+        }
+    return None
+
+
+def _detect_timing_drift(t, diff, rms_diff: float) -> dict | None:
+    """Detect linear frequency drift or systematic timing offset (suspicious)."""
+    if len(t) <= 10:
+        return None
+    t_norm = (t - t[0]) / max(t[-1] - t[0], 1.0)
+    poly = np.polyfit(t_norm, diff, 1)
+    linear_residual = float(np.std(diff - np.polyval(poly, t_norm)))
+    if abs(poly[0]) > rms_diff * 0.3 and linear_residual < rms_diff * 0.5:
+        return {
+            "diff_type":      "freq_deviation_ppm",
+            "classification": "expected",
+            "evidence":       f"Linear phase drift detected (slope={poly[0]:.4f})",
+            "suggestion":     "Crystal oscillator frequency tolerance — no RTL change needed.",
+        }
+    if abs(float(np.mean(diff[:max(len(diff) // 4, 1)]))) > rms_diff * 1.5:
+        return {
+            "diff_type":      "systematic_offset",
+            "classification": "suspicious",
+            "evidence":       "Uniform advance/delay across waveform",
+            "suggestion":     "Check pipeline stage count or clock division ratio in RTL.",
+        }
+    return None
+
+
+def _detect_missing_events(sim, meas) -> dict | None:
+    """Detect missing logic pulses in measurement vs. simulation (anomalous)."""
+    sim_pulses  = int(np.sum(np.diff((sim > 0.5).astype(int)) > 0))
+    meas_pulses = int(np.sum(np.diff((meas > 0.5).astype(int)) > 0))
+    if sim_pulses > 0 and meas_pulses < sim_pulses * 0.7:
+        missing = sim_pulses - meas_pulses
+        return {
+            "diff_type":      "missing_logic_event",
+            "classification": "anomalous",
+            "evidence":       f"Simulation has {sim_pulses} pulses; measurement has {meas_pulses} ({missing} missing)",
+            "suggestion":     "Check constraint file, enable conditions, or use ILA to verify in-system behavior.",
+        }
+    return None
+
+
+@mcp.tool()
 async def classify_differences_tool(
     diff_v: list[float],
     time_ns: list[float],
@@ -206,97 +299,29 @@ async def classify_differences_tool(
     Returns:
         [{diff_type, classification, evidence, suggestion}]
     """
-    import math
-
     if not diff_v or not time_ns:
         return []
 
-    np = None
-    try:
-        import numpy as _np
-        np = _np
-    except ImportError:
-        return [{"error": "numpy required for difference classification"}]
+    diff = np.array(diff_v)
+    sim  = np.array(sim_v)
+    meas = np.array(meas_v)
+    t    = np.array(time_ns)
 
-    diff  = np.array(diff_v)
-    sim   = np.array(sim_v)
-    meas  = np.array(meas_v)
-    t     = np.array(time_ns)
+    rms_diff = float(np.sqrt(np.mean(diff ** 2)))
+    if rms_diff < 1e-6:
+        return [{"diff_type": "none", "classification": "expected",
+                 "evidence": "RMS diff ≈ 0", "suggestion": "Simulation matches measurement"}]
 
     findings: list[dict] = []
-    rms_diff = float(np.sqrt(np.mean(diff ** 2)))
-
-    if rms_diff < 1e-6:
-        return [{"diff_type": "none", "classification": "expected", "evidence": "RMS diff ≈ 0", "suggestion": "Simulation matches measurement"}]
-
-    # ── 1. Overshoot / rise-time difference (expected) ────────────────────────
-    # Look for large transient diff at edges (sim transitions from 0→1 or 1→0)
-    sim_edges = np.where(np.abs(np.diff(sim)) > 0.4)[0]
-    if len(sim_edges) > 0:
-        edge_diffs = [abs(diff[i]) for i in sim_edges if i < len(diff)]
-        if edge_diffs and max(edge_diffs) > rms_diff * 2:
-            findings.append({
-                "diff_type":      "rise_time_overshoot",
-                "classification": "expected",
-                "evidence":       f"Large diff ({max(edge_diffs):.3f}) at {len(sim_edges)} edge(s); near-zero in stable regions",
-                "suggestion":     "RTL correct — physical effect. Consider adjusting DRIVE strength or output impedance.",
-            })
-
-    # ── 2. DC offset (suspicious → anomalous) ────────────────────────────────
-    dc_offset = float(np.mean(diff))
-    if abs(dc_offset) > rms_diff * 0.5:
-        findings.append({
-            "diff_type":      "amplitude_error" if abs(dc_offset) > 0.1 else "dc_offset",
-            "classification": "anomalous" if abs(dc_offset) > 0.1 else "suspicious",
-            "evidence":       f"Mean diff = {dc_offset:.4f} (systematic amplitude offset)",
-            "suggestion":     "Check data path bit-width, truncation, or shift operations (e.g. >> mismatch).",
-        })
-
-    # ── 3. High-frequency noise overlay (expected) ───────────────────────────
-    fft_result = compute_fft(list(t), list(diff), n_points=512)
-    if "dominant_freq_mhz" in fft_result:
-        dom_freq = fft_result["dominant_freq_mhz"]
-        clock_freq_mhz = 1000.0 / clock_period_ns if clock_period_ns > 0 else 100.0
-        if dom_freq > clock_freq_mhz * 5:
-            findings.append({
-                "diff_type":      "hf_noise_emi",
-                "classification": "expected",
-                "evidence":       f"Dominant diff frequency {dom_freq:.1f} MHz >> clock ({clock_freq_mhz:.1f} MHz)",
-                "suggestion":     "PCB routing or power supply issue — not an RTL problem.",
-            })
-
-    # ── 4. Systematic timing offset (suspicious) ─────────────────────────────
-    # Check if diff has a linear trend
-    if len(t) > 10:
-        t_norm = (t - t[0]) / max(t[-1] - t[0], 1.0)
-        poly = np.polyfit(t_norm, diff, 1)
-        linear_residual = float(np.std(diff - np.polyval(poly, t_norm)))
-        if abs(poly[0]) > rms_diff * 0.3 and linear_residual < rms_diff * 0.5:
-            findings.append({
-                "diff_type":      "freq_deviation_ppm",
-                "classification": "expected",
-                "evidence":       f"Linear phase drift detected (slope={poly[0]:.4f})",
-                "suggestion":     "Crystal oscillator frequency tolerance — no RTL change needed.",
-            })
-        elif abs(np.mean(diff[:len(diff)//4])) > rms_diff * 1.5:
-            findings.append({
-                "diff_type":      "systematic_offset",
-                "classification": "suspicious",
-                "evidence":       "Uniform advance/delay across waveform",
-                "suggestion":     "Check pipeline stage count or clock division ratio in RTL.",
-            })
-
-    # ── 5. Missing logic events (anomalous) ──────────────────────────────────
-    sim_pulses  = int(np.sum(np.diff((sim > 0.5).astype(int)) > 0))
-    meas_pulses = int(np.sum(np.diff((meas > 0.5).astype(int)) > 0))
-    if sim_pulses > 0 and meas_pulses < sim_pulses * 0.7:
-        missing = sim_pulses - meas_pulses
-        findings.append({
-            "diff_type":      "missing_logic_event",
-            "classification": "anomalous",
-            "evidence":       f"Simulation has {sim_pulses} pulses; measurement has {meas_pulses} ({missing} missing)",
-            "suggestion":     "Check constraint file, enable conditions, or use ILA to verify in-system behavior.",
-        })
+    for detector_result in [
+        _detect_rise_time_overshoot(diff, sim, rms_diff),
+        _detect_dc_offset(diff, rms_diff),
+        _detect_hf_noise(t, diff, clock_period_ns),
+        _detect_timing_drift(t, diff, rms_diff),
+        _detect_missing_events(sim, meas),
+    ]:
+        if detector_result is not None:
+            findings.append(detector_result)
 
     if not findings:
         findings.append({

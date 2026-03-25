@@ -22,6 +22,11 @@ Common SCPI waveform capture commands (instrument-agnostic):
 
 from __future__ import annotations
 
+import csv as csv_mod
+import io
+import os
+import tempfile
+
 
 def _require_pyvisa():
     try:
@@ -46,7 +51,6 @@ def connect(resource_string: str, timeout_ms: int = 5000) -> dict:
     """
     pyvisa = _require_pyvisa()
     rm = pyvisa.ResourceManager()
-
     try:
         instr = rm.open_resource(resource_string)
         instr.timeout = timeout_ms
@@ -87,7 +91,13 @@ def capture_waveform(
     """
     pyvisa = _require_pyvisa()
     rm = pyvisa.ResourceManager()
-    instr = rm.open_resource(resource_string)
+
+    # Wrap open_resource in try/except — instruments may be off or unreachable
+    try:
+        instr = rm.open_resource(resource_string)
+    except Exception as exc:
+        return {"error": f"Cannot open VISA resource '{resource_string}': {exc}"}
+
     instr.timeout = timeout_ms
 
     try:
@@ -100,11 +110,11 @@ def capture_waveform(
             instr.write(":WAV:MODE NORM")
             instr.write(":WAV:FORM ASCII")
 
-            x_inc  = float(instr.query(":WAV:XINC?"))
-            x_ori  = float(instr.query(":WAV:XORI?"))
-            y_inc  = float(instr.query(":WAV:YINC?"))
-            y_ori  = float(instr.query(":WAV:YORI?"))
-            y_ref  = float(instr.query(":WAV:YREF?"))
+            x_inc = float(instr.query(":WAV:XINC?"))
+            x_ori = float(instr.query(":WAV:XORI?"))
+            y_inc = float(instr.query(":WAV:YINC?"))
+            y_ori = float(instr.query(":WAV:YORI?"))
+            y_ref = float(instr.query(":WAV:YREF?"))
 
             raw_data = instr.query(":WAV:DATA?").strip()
 
@@ -119,16 +129,31 @@ def capture_waveform(
 
         except Exception:
             # Fallback: SAVe:WAVEform CSV (Tektronix style)
-            import tempfile, csv as csv_mod, io
-            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                tmp_path = tmp.name
-            instr.write(f"SAV:WAV {ch_name},CSV,\"{tmp_path}\"")
-            instr.query("*OPC?")
+            tmp_path = ""
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                    tmp_path = tmp.name
 
-            from instrument_mcp.readers.generic import read_csv_auto
-            result = read_csv_auto(tmp_path, channel=channel - 1)
-            import os; os.unlink(tmp_path)
-            return {**result, "idn": idn, "vendor": "scpi_fallback"}
+                instr.write(f'SAV:WAV {ch_name},CSV,"{tmp_path}"')
+
+                # *OPC? blocks until operation complete; guard with a tighter timeout
+                instr.timeout = min(timeout_ms, 30_000)
+                try:
+                    instr.query("*OPC?")
+                except Exception:
+                    pass   # Tektronix may not ack; check file presence instead
+
+                from instrument_mcp.readers.generic import read_csv_auto
+                result = read_csv_auto(tmp_path, channel=channel - 1)
+                return {**result, "idn": idn, "vendor": "scpi_fallback"}
+            except Exception as fallback_exc:
+                return {"error": f"SCPI WAV capture failed and CSV fallback also failed: {fallback_exc}"}
+            finally:
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
         duration_ns = time_ns[-1] - time_ns[0] if len(time_ns) > 1 else 0.0
         sample_rate = (len(time_ns) - 1) / (duration_ns * 1e-9) if duration_ns > 0 else 0.0
@@ -145,4 +170,7 @@ def capture_waveform(
         }
 
     finally:
-        instr.close()
+        try:
+            instr.close()
+        except Exception:
+            pass

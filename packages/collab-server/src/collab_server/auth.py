@@ -83,6 +83,12 @@ def register_api_key(raw_key: str, user_id: str, role: str = "contributor") -> N
     _API_KEYS[hash_api_key(raw_key)] = {"user_id": user_id, "role": role}
 
 
+def verify_api_key(raw_key: str) -> dict | None:
+    """Verify a raw API key and return its user info, or None if invalid."""
+    key_hash = hash_api_key(raw_key)
+    return _API_KEYS.get(key_hash)
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> dict:

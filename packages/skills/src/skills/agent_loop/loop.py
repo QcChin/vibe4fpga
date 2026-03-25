@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import AsyncGenerator
+from typing import TypedDict
 
 from .executor import StepResult, execute_step
 from .planner import AgentPlan, PlanStep, StepType, create_plan
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -40,15 +43,15 @@ class LoopEvent:
 
 @dataclass
 class LoopResult:
-    goal:          str
-    success:       bool
-    rounds:        int
+    goal:            str
+    success:         bool
+    rounds:          int
     completed_steps: list[dict]
-    failed_steps:  list[dict]
-    context:       dict
-    events:        list[dict]
-    report_md:     str
-    ask_user:      str | None = None   # populated if loop paused for human input
+    failed_steps:    list[dict]
+    context:         dict
+    events:          list[dict]
+    report_md:       str
+    ask_user:        str | None = None   # populated if loop paused for human input
 
 
 # ── Loop state machine ────────────────────────────────────────────────────────
@@ -76,6 +79,8 @@ class AgentLoop:
         self._completed:       set[int] = set()
         self._step_results:    list[StepResult] = []
         self._retry_counts:    dict[int, int] = {}
+        # Accumulate all failure rounds for richer re-planning context
+        self._all_failures:    list[dict] = []
 
     def _emit(self, event: str, **kwargs) -> LoopEvent:
         ev = LoopEvent(event=event, **kwargs)
@@ -102,6 +107,8 @@ class AgentLoop:
                        data={"steps": [s.step_id for s in plan.steps]})
 
             if not plan.steps:
+                # Empty plan — treat as failure, not success
+                self._emit("error", message="Planner returned empty step list")
                 break
 
             # ── Execution phase ───────────────────────────────────────────────
@@ -113,18 +120,26 @@ class AgentLoop:
                 if not ready:
                     break
 
-                # Run ready steps concurrently (if no data dependencies)
-                results = await asyncio.gather(
-                    *[self._run_step(step, plan) for step in ready]
+                # Run ready steps concurrently; return_exceptions prevents
+                # one failure from cancelling sibling coroutines
+                raw_results = await asyncio.gather(
+                    *[self._run_step(step) for step in ready],
+                    return_exceptions=True,
                 )
 
-                for result, step in zip(results, ready):
-                    if result is None:
+                for raw, step in zip(raw_results, ready):
+                    if isinstance(raw, BaseException):
+                        logger.error("Unhandled exception in step %d: %s", step.step_id, raw)
+                        all_success = False
                         continue
-                    if step.step_type == StepType.ASK_USER:
+
+                    result: StepResult | None = raw
+                    if result is None:
+                        # ASK_USER sentinel
                         ask_user_msg = step.params.get("question", "Input required")
                         all_success = False
                         break
+
                     if result.success:
                         self._completed.add(step.step_id)
                     else:
@@ -143,21 +158,27 @@ class AgentLoop:
             if all_success:
                 break
 
-            # ── Re-plan with failure context ──────────────────────────────────
-            failed = [r for r in self._step_results if not r.success]
-            self.context["previous_failures"] = [
+            # ── Re-plan with accumulated failure context ───────────────────────
+            round_failures = [
                 {"step_id": r.step_id, "error": r.error, "output": r.output}
-                for r in failed[-3:]
+                for r in self._step_results
+                if not r.success
             ]
+            self._all_failures.extend(round_failures)
+            # Keep last 9 failures across all rounds for LLM context
+            self.context["previous_failures"] = self._all_failures[-9:]
 
         # ── Build final result ────────────────────────────────────────────────
-        all_done = plan is not None and all(
-            s.step_id in self._completed for s in plan.steps
+        # Only succeed if plan existed, had steps, and all are done
+        all_done = (
+            plan is not None
+            and len(plan.steps) > 0
+            and all(s.step_id in self._completed for s in plan.steps)
         )
         return self._build_result(success=all_done, rounds=round_n)
 
-    async def _run_step(self, step: PlanStep, plan: AgentPlan) -> StepResult | None:
-        """Execute one step with retry logic."""
+    async def _run_step(self, step: PlanStep) -> StepResult | None:
+        """Execute one step with iterative retry logic (no recursion)."""
         if step.step_type == StepType.ASK_USER:
             self._emit("step_start", step_id=step.step_id, step_type=step.step_type.value,
                        message=step.description)
@@ -166,22 +187,28 @@ class AgentLoop:
         self._emit("step_start", step_id=step.step_id, step_type=step.step_type.value,
                    message=step.description)
 
-        retries = self._retry_counts.get(step.step_id, 0)
-        result  = await execute_step(step, self.context, self.router_url)
+        result: StepResult | None = None
+        for attempt in range(self.max_retries_per_step + 1):
+            result = await execute_step(step, self.context, self.router_url)
+
+            if result.success:
+                break
+
+            if not result.retry_suggested or attempt >= self.max_retries_per_step:
+                break
+
+            self._emit("step_fail", step_id=step.step_id, step_type=step.step_type.value,
+                       message=f"Failed (retry {attempt + 1}/{self.max_retries_per_step}): {result.error}")
+
+        assert result is not None
         self._step_results.append(result)
 
         if result.success:
             self._emit("step_done", step_id=step.step_id, step_type=step.step_type.value,
                        message="OK", data={"summary": _summarize_output(result.output)})
         else:
-            if result.retry_suggested and retries < self.max_retries_per_step:
-                self._retry_counts[step.step_id] = retries + 1
-                self._emit("step_fail", step_id=step.step_id, step_type=step.step_type.value,
-                           message=f"Failed (retry {retries+1}/{self.max_retries_per_step}): {result.error}")
-                return await self._run_step(step, plan)
-            else:
-                self._emit("step_fail", step_id=step.step_id, step_type=step.step_type.value,
-                           message=f"Failed: {result.error}")
+            self._emit("step_fail", step_id=step.step_id, step_type=step.step_type.value,
+                       message=f"Failed: {result.error}")
 
         return result
 
@@ -278,11 +305,11 @@ async def run(
         router_url:           LLM Router URL.
         model:                LLM backend key.
         max_rounds:           Maximum re-planning rounds before giving up.
-        max_retries_per_step: How many times to retry a failing step.
+        max_retries_per_step: How many times to retry a failing step before moving on.
 
     Returns:
-        LoopResult as dict: {goal, success, rounds, completed_steps, failed_steps,
-                              context, events, report_md, ask_user}
+        {goal, success, rounds, completed_steps, failed_steps,
+         context, events, report_md, ask_user}
     """
     loop = AgentLoop(
         goal=goal,
