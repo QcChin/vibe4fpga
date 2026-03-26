@@ -1,23 +1,41 @@
 import * as vscode from 'vscode';
-import { ChatPanel } from './panels/ChatPanel';
+import { ChatViewProvider } from './panels/ChatViewProvider';
+import { McpManager } from './services/McpManager';
 import { COMMANDS } from './commands';
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('FPGA Vibe Coding IDE is now active');
 
+    // ── MCP process manager ──────────────────────────────────────────────────
+    const mcpManager = new McpManager((id, status) => {
+        provider.notifyMcpStatus(id, status);
+    });
+
+    // ── Sidebar chat view provider ───────────────────────────────────────────
+    const provider = new ChatViewProvider(context.extensionUri, mcpManager);
     context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            ChatViewProvider.viewType,
+            provider,
+            { webviewOptions: { retainContextWhenHidden: true } },
+        ),
+    );
+
+    // ── Commands ─────────────────────────────────────────────────────────────
+    context.subscriptions.push(
+
         vscode.commands.registerCommand(COMMANDS.OPEN_CHAT, () => {
-            ChatPanel.createOrShow(context.extensionUri);
+            // Focus / reveal the sidebar chat panel
+            provider.focus();
         }),
 
         vscode.commands.registerCommand(COMMANDS.SPEC2RTL, async () => {
+            provider.focus();
             const editor = vscode.window.activeTextEditor;
-            const spec = editor?.document.getText(editor.selection) || '';
-            ChatPanel.createOrShow(context.extensionUri);
+            const spec   = editor?.document.getText(editor.selection) || '';
             if (spec) {
-                ChatPanel.postMessage({ type: 'prefill', text: `[Spec2RTL] ${spec}` });
+                provider.postMessage({ type: 'prefill', text: `[Spec2RTL] ${spec}` });
             }
-            // TODO: Phase 1 — invoke Spec2RTL skill via LLM Router
         }),
 
         vscode.commands.registerCommand(COMMANDS.CODE_REVIEW, async () => {
@@ -26,22 +44,24 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showWarningMessage('Please open an RTL file first.');
                 return;
             }
-            const code = editor.document.getText();
-            ChatPanel.createOrShow(context.extensionUri);
-            ChatPanel.postMessage({ type: 'prefill', text: `[CodeReview] ${editor.document.fileName}` });
-            // TODO: Phase 1 — invoke CodeReview skill via LLM Router
+            provider.focus();
+            provider.postMessage({
+                type: 'prefill',
+                text: `[CodeReview] ${editor.document.fileName}`,
+            });
         }),
 
         vscode.commands.registerCommand(COMMANDS.TIMING_FIX, async () => {
-            // TODO: Phase 2 — invoke TimingFix skill
             vscode.window.showInformationMessage('TimingFix: available in Phase 2');
         }),
 
         vscode.commands.registerCommand(COMMANDS.WAVEFORM_DEBUG, async () => {
-            // TODO: Phase 2 — invoke WaveformDebug skill via waveform-mcp
             vscode.window.showInformationMessage('WaveformDebug: available in Phase 2');
         }),
     );
+
+    // ── Cleanup ──────────────────────────────────────────────────────────────
+    context.subscriptions.push({ dispose: () => mcpManager.dispose() });
 }
 
 export function deactivate() {}

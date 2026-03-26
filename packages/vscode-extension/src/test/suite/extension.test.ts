@@ -129,16 +129,17 @@ suite('Extension', () => {
 
     // ── Command: spec2rtl with active selection ──────────────────────────────
 
-    test('spec2rtl opens chat panel when a Verilog file is active', async () => {
+    test('spec2rtl executes without error when a Verilog file is active', async () => {
         // __dirname is out/test/suite/ after compile; fixture lives in src/test/fixtures/
         const fixturePath = path.resolve(__dirname, '../../../src/test/fixtures/sample.v');
         const uri = vscode.Uri.file(fixturePath);
         const doc = await vscode.workspace.openTextDocument(uri);
         await vscode.window.showTextDocument(doc);
 
-        // Does NOT require a router — just verifies no error is thrown
-        // and that the panel object exists afterward.
-        await vscode.commands.executeCommand('vibe4fpga.spec2rtl');
+        // spec2rtl now focuses the sidebar ChatViewProvider — just verify no throw.
+        await assert.doesNotReject(
+            async () => { await vscode.commands.executeCommand('vibe4fpga.spec2rtl'); },
+        );
 
         // Close the editor to avoid affecting other tests
         await vscode.commands.executeCommand('workbench.action.closeActiveEditor');

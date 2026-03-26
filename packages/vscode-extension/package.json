@@ -102,6 +102,11 @@
           "type": "boolean",
           "default": false,
           "description": "Enable RAG knowledge base (requires datasheet-mcp to be running)"
+        },
+        "vibe4fpga.projectRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the vibe4fpga monorepo root. Used to locate MCP server packages. Defaults to the first workspace folder."
         }
       }
     }

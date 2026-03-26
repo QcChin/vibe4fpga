@@ -99,17 +99,11 @@ suite('ChatPanel', () => {
 
     // ── openChat command integration ─────────────────────────────────────────
 
-    test('openChat command creates the panel via ChatPanel.createOrShow', async () => {
-        // Start with no panel
-        if (ChatPanel.currentPanel) {
-            ChatPanel.currentPanel.dispose();
-        }
-
-        await vscode.commands.executeCommand('vibe4fpga.openChat');
-
-        assert.ok(
-            ChatPanel.currentPanel !== undefined,
-            'openChat should create a ChatPanel',
+    test('openChat command executes without error', async () => {
+        // openChat now focuses the sidebar ChatViewProvider instead of
+        // creating a floating ChatPanel — just verify it doesn't throw.
+        await assert.doesNotReject(
+            async () => { await vscode.commands.executeCommand('vibe4fpga.openChat'); },
         );
     });
 });
