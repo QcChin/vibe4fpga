@@ -130,7 +130,8 @@ suite('Extension', () => {
     // ── Command: spec2rtl with active selection ──────────────────────────────
 
     test('spec2rtl opens chat panel when a Verilog file is active', async () => {
-        const fixturePath = path.resolve(__dirname, '../fixtures/sample.v');
+        // __dirname is out/test/suite/ after compile; fixture lives in src/test/fixtures/
+        const fixturePath = path.resolve(__dirname, '../../../src/test/fixtures/sample.v');
         const uri = vscode.Uri.file(fixturePath);
         const doc = await vscode.workspace.openTextDocument(uri);
         await vscode.window.showTextDocument(doc);
