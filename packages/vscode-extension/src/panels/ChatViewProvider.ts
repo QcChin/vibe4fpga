@@ -204,10 +204,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    // ── HTML ─────────────────────────────────────────────────────────────────
+    // ── HTML (Claude Code–inspired layout) ───────────────────────────────────
 
-    private _html(webview: vscode.Webview): string {
-        const n = nonce();
+    private _html(_webview: vscode.Webview): string {
+        const n       = nonce();
         const mcpDefs = JSON.stringify(MCP_SERVICE_DEFS.map(d => ({ id: d.id, label: d.label })));
 
         return /* html */`<!DOCTYPE html>
@@ -219,379 +219,473 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${n}';">
 <title>FPGA Vibe Coding</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{
-    font-family:var(--vscode-font-family);
-    font-size:var(--vscode-font-size);
-    color:var(--vscode-foreground);
-    background:var(--vscode-editor-background);
-    height:100vh;display:flex;flex-direction:column;overflow:hidden
-  }
+:root {
+  --accent:      #c96442;
+  --accent-h:    #e07050;
+  --accent-dim:  rgba(201,100,66,.15);
+  --bg:          var(--vscode-editor-background, #1e1e1e);
+  --surface:     var(--vscode-input-background,  #2a2a2a);
+  --border:      var(--vscode-panel-border,      rgba(255,255,255,.1));
+  --text:        var(--vscode-foreground,        #e0e0e0);
+  --muted:       var(--vscode-descriptionForeground, #888);
+  --font:        var(--vscode-font-family, -apple-system, sans-serif);
+  --mono:        var(--vscode-editor-font-family, monospace);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);font-size:13px;color:var(--text);background:var(--bg);
+     height:100vh;display:flex;flex-direction:column;overflow:hidden}
 
-  /* ── Settings panel ── */
-  #settings{border-bottom:1px solid var(--vscode-panel-border)}
-  #settings summary{
-    padding:6px 10px;cursor:pointer;user-select:none;
-    font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;
-    background:var(--vscode-sideBarSectionHeader-background);
-    list-style:none;display:flex;align-items:center;gap:6px
-  }
-  #settings summary::before{content:'▸';font-size:9px;transition:transform .15s}
-  #settings[open] summary::before{transform:rotate(90deg)}
-  .settings-body{
-    padding:10px;display:flex;flex-direction:column;gap:8px;
-    max-height:55vh;overflow-y:auto;
-    background:var(--vscode-editor-background)
-  }
-  .cfg-label{font-size:11px;color:var(--vscode-descriptionForeground);margin-bottom:2px}
-  .cfg-group{display:flex;flex-direction:column;gap:2px}
-  select,input[type=text],input[type=password]{
-    background:var(--vscode-input-background);
-    color:var(--vscode-input-foreground);
-    border:1px solid var(--vscode-input-border,#555);
-    padding:4px 6px;border-radius:2px;width:100%;font-size:12px;
-    font-family:inherit
-  }
-  .btn-save{
-    padding:4px 10px;background:var(--vscode-button-background);
-    color:var(--vscode-button-foreground);border:none;border-radius:2px;
-    cursor:pointer;font-size:12px;align-self:flex-start;margin-top:2px
-  }
-  .btn-save:hover{background:var(--vscode-button-hoverBackground)}
-  .cfg-divider{border:none;border-top:1px solid var(--vscode-panel-border);margin:4px 0}
-  .mcp-row{
-    display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px
-  }
-  .dot{
-    width:8px;height:8px;border-radius:50%;flex-shrink:0;
-    background:var(--vscode-descriptionForeground)
-  }
-  .dot.stopped {background:#606060}
-  .dot.starting{background:#d4ac0d}
-  .dot.running {background:#4caf50}
-  .dot.error   {background:#f44336}
-  .mcp-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .mcp-btn{
-    padding:2px 8px;font-size:11px;
-    background:var(--vscode-button-secondaryBackground,#3a3d41);
-    color:var(--vscode-button-secondaryForeground,#ccc);
-    border:none;border-radius:2px;cursor:pointer;flex-shrink:0
-  }
-  .mcp-btn:hover{background:var(--vscode-button-secondaryHoverBackground,#4a4d51)}
-  .cfg-saved{font-size:11px;color:#4caf50;display:none}
+/* ── Header ── */
+#hdr{display:flex;align-items:center;padding:7px 10px;
+     border-bottom:1px solid var(--border);flex-shrink:0;gap:6px}
+.logo{flex:1;font-size:12px;font-weight:600;letter-spacing:.04em;
+      display:flex;align-items:center;gap:6px}
+.logo-icon{color:var(--accent);flex-shrink:0}
+.hdr-btns{display:flex;gap:2px}
+.ibtn{background:none;border:none;color:var(--muted);cursor:pointer;
+      padding:4px;border-radius:4px;display:flex;align-items:center;line-height:1;
+      transition:color .15s,background .15s}
+.ibtn:hover{color:var(--text);background:rgba(255,255,255,.08)}
+.ibtn.on{color:var(--accent)}
 
-  /* ── Messages ── */
-  #messages{
-    flex:1;overflow-y:auto;padding:10px;
-    display:flex;flex-direction:column;gap:8px
-  }
-  .message{
-    padding:7px 10px;border-radius:4px;max-width:95%;
-    white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.55
-  }
-  .user     {background:var(--vscode-inputValidation-infoBackground);align-self:flex-end}
-  .assistant{background:var(--vscode-editor-inactiveSelectionBackground);align-self:flex-start}
-  .error    {background:var(--vscode-inputValidation-errorBackground);align-self:flex-start}
-  .streaming{
-    background:var(--vscode-editor-inactiveSelectionBackground);align-self:flex-start;
-    border-left:2px solid var(--vscode-progressBar-background)
-  }
-  .rtl-block{font-family:var(--vscode-editor-font-family,monospace);font-size:11px}
-  .placeholder{
-    color:var(--vscode-descriptionForeground);font-style:italic;
-    text-align:center;margin-top:32px;line-height:1.8;font-size:12px
-  }
+/* ── Settings drawer ── */
+#cfg-drawer{overflow:hidden;max-height:0;flex-shrink:0;
+            transition:max-height .25s ease-out,border-bottom-width 0s .25s}
+#cfg-drawer.open{max-height:540px;border-bottom:1px solid var(--border);
+                 transition:max-height .3s ease-in}
+.cfg-body{padding:12px;display:flex;flex-direction:column;gap:10px;
+          max-height:540px;overflow-y:auto}
+.cfg-sec{display:flex;flex-direction:column;gap:6px}
+.cfg-ttl{font-size:10px;font-weight:700;text-transform:uppercase;
+         letter-spacing:.07em;color:var(--muted)}
+.fld{display:flex;flex-direction:column;gap:3px}
+.fld label{font-size:11px;color:var(--muted)}
+.fld select,.fld input{background:var(--surface);color:var(--text);
+  border:1px solid var(--border);border-radius:4px;padding:5px 8px;
+  font-size:12px;width:100%;font-family:var(--font);outline:none}
+.fld select:focus,.fld input:focus{border-color:var(--accent)}
+.btn-save{background:var(--accent);color:#fff;border:none;border-radius:4px;
+          padding:5px 14px;font-size:12px;cursor:pointer;align-self:flex-start;
+          font-family:var(--font)}
+.btn-save:hover{background:var(--accent-h)}
+.cfg-ok{font-size:11px;color:#4caf50;display:none;margin-left:6px}
+.sep{border:none;border-top:1px solid var(--border);margin:2px 0}
+/* MCP rows */
+.mcp-row{display:flex;align-items:center;gap:7px;padding:3px 0;font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot.stopped {background:#555}
+.dot.starting{background:#d4ac0d}
+.dot.running {background:#4caf50}
+.dot.error   {background:#f44336}
+.mcp-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcp-btn{font-size:11px;padding:2px 8px;background:rgba(255,255,255,.06);
+         color:var(--muted);border:1px solid var(--border);border-radius:3px;
+         cursor:pointer;flex-shrink:0;font-family:var(--font)}
+.mcp-btn:hover{color:var(--text);background:rgba(255,255,255,.11)}
+.mcp-btn.stop{color:#f98;border-color:rgba(244,100,80,.35)}
 
-  /* ── Toolbar ── */
-  #toolbar{
-    display:flex;gap:4px;padding:4px 8px;
-    border-top:1px solid var(--vscode-panel-border)
-  }
-  #status-bar{
-    padding:2px 8px;font-size:11px;
-    color:var(--vscode-descriptionForeground);min-height:18px
-  }
-  .tool-btn{
-    padding:3px 8px;font-size:11px;
-    background:var(--vscode-button-secondaryBackground,#3a3d41);
-    color:var(--vscode-button-secondaryForeground,#ccc);
-    border:none;border-radius:2px;cursor:pointer
-  }
-  .tool-btn:hover{background:var(--vscode-button-secondaryHoverBackground,#4a4d51)}
+/* ── Messages ── */
+#msgs{flex:1;overflow-y:auto;display:flex;flex-direction:column}
 
-  /* ── Input ── */
-  #input-area{
-    display:flex;gap:6px;padding:6px 8px;
-    border-top:1px solid var(--vscode-panel-border)
-  }
-  #message-input{
-    flex:1;resize:none;padding:5px 7px;
-    background:var(--vscode-input-background);
-    color:var(--vscode-input-foreground);
-    border:1px solid var(--vscode-input-border,#555);
-    border-radius:2px;font-family:inherit;font-size:12px;height:54px
-  }
-  #send-btn{
-    padding:5px 12px;
-    background:var(--vscode-button-background);
-    color:var(--vscode-button-foreground);
-    border:none;border-radius:2px;cursor:pointer;align-self:flex-end;font-size:12px
-  }
-  #send-btn:hover{background:var(--vscode-button-hoverBackground)}
-  #send-btn:disabled{opacity:.5;cursor:not-allowed}
+/* Empty state */
+#empty{flex:1;display:flex;flex-direction:column;align-items:center;
+       justify-content:center;gap:14px;padding:28px 18px;text-align:center}
+#empty p{font-size:13px;line-height:1.65;color:var(--text)}
+#empty small{font-size:11px;color:var(--muted);line-height:1.6}
+
+/* Message list */
+.msg-list{display:flex;flex-direction:column;padding:10px 0;flex:1}
+.mg{padding:6px 12px}
+.mg-role{font-size:10px;font-weight:700;letter-spacing:.05em;margin-bottom:3px}
+.mg-role.you{color:var(--accent);text-align:right}
+.mg-role.ai {color:var(--muted)}
+.mg-body{font-size:12px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
+.mg-body.you{text-align:right}
+.mg-body.err{color:#f98}
+.mg-body.streaming{padding-left:8px;border-left:2px solid var(--accent)}
+.mg-code{font-family:var(--mono);font-size:11px;background:rgba(0,0,0,.28);
+         border:1px solid var(--border);border-radius:5px;padding:8px 10px;
+         margin-top:6px;overflow-x:auto;white-space:pre;line-height:1.5}
+
+/* ── Status bar ── */
+#sbar{height:18px;padding:0 10px;font-size:11px;color:var(--accent);
+      display:flex;align-items:center;gap:5px;flex-shrink:0}
+.spin{width:10px;height:10px;border:1.5px solid var(--accent);
+      border-top-color:transparent;border-radius:50%;
+      animation:rot .7s linear infinite;display:none}
+@keyframes rot{to{transform:rotate(360deg)}}
+
+/* ── Input area ── */
+#inp-wrap{padding:8px 10px 10px;border-top:1px solid var(--border);flex-shrink:0}
+#inp-box{display:flex;align-items:flex-end;gap:6px;background:var(--surface);
+         border:1px solid var(--border);border-radius:8px;
+         padding:8px 8px 8px 12px;transition:border-color .15s}
+#inp-box:focus-within{border-color:rgba(201,100,66,.5)}
+#msg-inp{flex:1;background:none;border:none;outline:none;color:var(--text);
+         font-family:var(--font);font-size:13px;line-height:1.5;
+         resize:none;min-height:20px;max-height:110px;overflow-y:auto}
+#msg-inp::placeholder{color:var(--muted)}
+#send{width:28px;height:28px;background:var(--accent);color:#fff;border:none;
+      border-radius:6px;cursor:pointer;display:flex;align-items:center;
+      justify-content:center;flex-shrink:0;transition:background .15s}
+#send:hover{background:var(--accent-h)}
+#send:disabled{background:var(--muted);opacity:.5;cursor:not-allowed}
+#act-bar{display:flex;align-items:center;gap:4px;padding-top:6px}
+.abtn{background:none;border:1px solid var(--border);border-radius:4px;
+      color:var(--muted);cursor:pointer;padding:3px 8px;font-size:11px;
+      font-family:var(--font);display:flex;align-items:center;gap:4px;
+      transition:color .15s,border-color .15s,background .15s}
+.abtn:hover{color:var(--text);border-color:rgba(255,255,255,.2);
+            background:rgba(255,255,255,.05)}
+.abtn.hi{color:var(--accent);border-color:rgba(201,100,66,.4)}
+.spacer{flex:1}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+::-webkit-scrollbar-thumb:hover{background:var(--muted)}
 </style>
 </head>
 <body>
 
-<!-- ── Settings panel ── -->
-<details id="settings">
-  <summary>⚙ 配置 &amp; 服务</summary>
-  <div class="settings-body">
-
-    <div class="cfg-group">
-      <div class="cfg-label">LLM Backend</div>
-      <select id="cfg-backend">
-        <option value="claude">Claude Sonnet（推荐）</option>
-        <option value="claude-opus">Claude Opus</option>
-        <option value="claude-haiku">Claude Haiku（快速）</option>
-        <option value="ollama">Ollama（本地）</option>
-        <option value="rtlcoder">RTLCoder（HDL 微调）</option>
-        <option value="codev">CodeV（HDL 微调）</option>
-      </select>
-    </div>
-
-    <div class="cfg-group">
-      <div class="cfg-label">Router URL</div>
-      <input id="cfg-url" type="text" placeholder="http://localhost:8765">
-    </div>
-
-    <div class="cfg-group">
-      <div class="cfg-label">API Key</div>
-      <input id="cfg-key" type="password" placeholder="sk-ant-…（留空保持不变）">
-    </div>
-
-    <div style="display:flex;align-items:center;gap:8px">
-      <button class="btn-save" onclick="saveConfig()">保存配置</button>
-      <span class="cfg-saved" id="cfg-saved">✓ 已保存</span>
-    </div>
-
-    <hr class="cfg-divider">
-    <div class="cfg-label">MCP 服务（可选）</div>
-    <div id="mcp-list"></div>
-
+<!-- Header -->
+<div id="hdr">
+  <div class="logo">
+    <svg class="logo-icon" width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
+      <rect x="4" y="4" width="8" height="8" rx="1.2"/>
+      <rect x="1.5" y="5.5" width="2.5" height="1.5" rx=".4"/>
+      <rect x="1.5" y="9"   width="2.5" height="1.5" rx=".4"/>
+      <rect x="12"  y="5.5" width="2.5" height="1.5" rx=".4"/>
+      <rect x="12"  y="9"   width="2.5" height="1.5" rx=".4"/>
+      <rect x="5.5" y="1.5" width="1.5" height="2.5" rx=".4"/>
+      <rect x="9"   y="1.5" width="1.5" height="2.5" rx=".4"/>
+      <rect x="5.5" y="12"  width="1.5" height="2.5" rx=".4"/>
+      <rect x="9"   y="12"  width="1.5" height="2.5" rx=".4"/>
+    </svg>
+    FPGA Vibe Coding
   </div>
-</details>
-
-<!-- ── Messages ── -->
-<div id="messages">
-  <div class="placeholder">
-    用自然语言描述你的 FPGA 设计需求<br>
-    <small>例：设计一个带异步复位的 8-bit 计数器</small><br>
-    <small>或点击 ⚡ Spec→RTL 直接生成 RTL</small>
+  <div class="hdr-btns">
+    <!-- Settings gear -->
+    <button class="ibtn" id="cfg-btn" onclick="toggleCfg()" title="配置">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0
+          1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023
+          1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0
+          1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464
+          1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81
+          0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698
+          2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0
+          1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464
+          1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464
+          1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.86
+          2.929 2.929 0 0 1 0 5.858z"/>
+      </svg>
+    </button>
+    <!-- Clear -->
+    <button class="ibtn" onclick="clearChat()" title="清空对话">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5
+          0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1
+          0v6a.5.5 0 0 0 1 0V6z"/>
+        <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2
+          0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1
+          1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4L4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0
+          1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
+      </svg>
+    </button>
   </div>
 </div>
 
-<div id="status-bar"></div>
+<!-- Settings drawer -->
+<div id="cfg-drawer">
+  <div class="cfg-body">
 
-<!-- ── Toolbar ── -->
-<div id="toolbar">
-  <button class="tool-btn" onclick="triggerSpec2RTL()" title="将输入框内容作为规格生成 RTL">⚡ Spec→RTL</button>
-  <button class="tool-btn" onclick="clearChat()" title="清空对话">✕ 清空</button>
+    <div class="cfg-sec">
+      <div class="cfg-ttl">LLM 配置</div>
+      <div class="fld">
+        <label>Backend</label>
+        <select id="cfg-backend">
+          <option value="claude">Claude Sonnet（默认）</option>
+          <option value="claude-opus">Claude Opus</option>
+          <option value="claude-haiku">Claude Haiku（快速）</option>
+          <option value="ollama">Ollama（本地）</option>
+          <option value="rtlcoder">RTLCoder（HDL 微调）</option>
+          <option value="codev">CodeV（HDL 微调）</option>
+        </select>
+      </div>
+      <div class="fld">
+        <label>Router URL</label>
+        <input id="cfg-url" type="text" placeholder="http://localhost:8765">
+      </div>
+      <div class="fld">
+        <label>API Key</label>
+        <input id="cfg-key" type="password" placeholder="sk-ant-…（留空保持不变）">
+      </div>
+      <div style="display:flex;align-items:center">
+        <button class="btn-save" onclick="saveCfg()">保存</button>
+        <span class="cfg-ok" id="cfg-ok">✓ 已保存</span>
+      </div>
+    </div>
+
+    <hr class="sep">
+
+    <div class="cfg-sec">
+      <div class="cfg-ttl">MCP 服务</div>
+      <div id="mcp-list"></div>
+    </div>
+
+  </div>
 </div>
 
-<!-- ── Input ── -->
-<div id="input-area">
-  <textarea id="message-input" placeholder="描述设计意图… (Ctrl+Enter 发送)"></textarea>
-  <button id="send-btn" onclick="sendMessage()">发送</button>
+<!-- Messages -->
+<div id="msgs">
+  <div id="empty">
+    <!-- FPGA chip illustration -->
+    <svg width="54" height="54" viewBox="0 0 56 56" fill="none">
+      <rect x="14" y="14" width="28" height="28" rx="3.5" fill="#c96442"/>
+      <rect x="19" y="8"  width="4" height="6" rx="1" fill="#c96442"/>
+      <rect x="26" y="8"  width="4" height="6" rx="1" fill="#c96442"/>
+      <rect x="33" y="8"  width="4" height="6" rx="1" fill="#c96442"/>
+      <rect x="19" y="42" width="4" height="6" rx="1" fill="#c96442"/>
+      <rect x="26" y="42" width="4" height="6" rx="1" fill="#c96442"/>
+      <rect x="33" y="42" width="4" height="6" rx="1" fill="#c96442"/>
+      <rect x="8"  y="19" width="6" height="4" rx="1" fill="#c96442"/>
+      <rect x="8"  y="26" width="6" height="4" rx="1" fill="#c96442"/>
+      <rect x="8"  y="33" width="6" height="4" rx="1" fill="#c96442"/>
+      <rect x="42" y="19" width="6" height="4" rx="1" fill="#c96442"/>
+      <rect x="42" y="26" width="6" height="4" rx="1" fill="#c96442"/>
+      <rect x="42" y="33" width="6" height="4" rx="1" fill="#c96442"/>
+      <rect x="18" y="18" width="8" height="8" rx="1.5" fill="rgba(0,0,0,.28)"/>
+      <rect x="30" y="18" width="8" height="8" rx="1.5" fill="rgba(0,0,0,.28)"/>
+      <rect x="18" y="30" width="8" height="8" rx="1.5" fill="rgba(0,0,0,.28)"/>
+      <rect x="30" y="30" width="8" height="8" rx="1.5" fill="rgba(0,0,0,.28)"/>
+      <circle cx="28" cy="28" r="3" fill="rgba(255,255,255,.3)"/>
+    </svg>
+    <p>描述你的 FPGA 设计需求<br>或询问代码库中的任何问题</p>
+    <small>例：设计一个带异步复位的 8-bit 计数器<br>或：解释这段 Verilog 里的时钟域交叉问题</small>
+  </div>
+</div>
+
+<!-- Status bar -->
+<div id="sbar">
+  <div class="spin" id="spin"></div>
+  <span id="stext"></span>
+</div>
+
+<!-- Input -->
+<div id="inp-wrap">
+  <div id="inp-box">
+    <textarea id="msg-inp" rows="1"
+              placeholder="描述 FPGA 设计需求… (Ctrl+Enter 发送)"></textarea>
+    <button id="send" onclick="send()" title="发送">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 15a.5.5 0 0 0 .5-.5V2.707l3.146 3.147a.5.5 0 0 0
+          .708-.708l-4-4a.5.5 0 0 0-.708 0l-4 4a.5.5 0 1 0 .708.708L7.5
+          2.707V14.5a.5.5 0 0 0 .5.5z"/>
+      </svg>
+    </button>
+  </div>
+  <div id="act-bar">
+    <button class="abtn" onclick="specToRtl()" title="将输入框内容生成 RTL">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M11.251.068a.5.5 0 0 1 .227.58L9.677 6.5H13a.5.5 0 0 1
+          .364.843l-8 8.5a.5.5 0 0 1-.842-.49L6.323 9.5H3a.5.5 0 0 1-.364-.843l8-8.5a.5.5
+          0 0 1 .615-.09z"/>
+      </svg>
+      Spec→RTL
+    </button>
+    <div class="spacer"></div>
+    <button class="abtn hi" id="ask-btn">Ask before edits</button>
+  </div>
 </div>
 
 <script nonce="${n}">
-const vscode      = acquireVsCodeApi();
-const messagesEl  = document.getElementById('messages');
-const sendBtn     = document.getElementById('send-btn');
-const statusBar   = document.getElementById('status-bar');
-const MCP_SERVICES = ${mcpDefs};
+const vscode    = acquireVsCodeApi();
+const msgsEl    = document.getElementById('msgs');
+const emptyEl   = document.getElementById('empty');
+const sendBtn   = document.getElementById('send');
+const spinEl    = document.getElementById('spin');
+const stextEl   = document.getElementById('stext');
+const cfgDrawer = document.getElementById('cfg-drawer');
+const cfgBtn    = document.getElementById('cfg-btn');
+const MCP       = ${mcpDefs};
 
-let firstMessage = true;
-let streamingDiv  = null;
+let hasMsgs    = false;
+let msgList    = null;
+let streaming  = null;
+let cfgOpen    = false;
 
-// ── Render MCP list ──────────────────────────────────────────────────────────
-(function renderMcpList() {
+// ── Settings ─────────────────────────────────────────────────────────────────
+function toggleCfg() {
+  cfgOpen = !cfgOpen;
+  cfgDrawer.classList.toggle('open', cfgOpen);
+  cfgBtn.classList.toggle('on', cfgOpen);
+}
+function saveCfg() {
+  vscode.postMessage({ type:'saveConfig', config:{
+    backend:   document.getElementById('cfg-backend').value,
+    routerUrl: document.getElementById('cfg-url').value,
+    apiKey:    document.getElementById('cfg-key').value,
+  }});
+}
+
+// ── MCP list ─────────────────────────────────────────────────────────────────
+(function() {
   const list = document.getElementById('mcp-list');
-  for (const svc of MCP_SERVICES) {
+  for (const s of MCP) {
     const row = document.createElement('div');
     row.className = 'mcp-row';
     row.innerHTML =
-      '<span class="dot stopped" id="dot-' + svc.id + '"></span>' +
-      '<span class="mcp-name">' + svc.label + '</span>' +
-      '<button class="mcp-btn" id="btn-' + svc.id + '" ' +
-        'onclick="toggleMcp(\\'' + svc.id + '\\')">Start</button>';
+      '<span class="dot stopped" id="d-' + s.id + '"></span>' +
+      '<span class="mcp-name">' + s.label + '</span>' +
+      '<button class="mcp-btn" id="b-' + s.id + '" ' +
+        'onclick="tMcp(\\'' + s.id + '\\')">Start</button>';
     list.appendChild(row);
   }
 })();
-
-// ── MCP helpers ──────────────────────────────────────────────────────────────
-function toggleMcp(id) {
-  vscode.postMessage({ type: 'toggleMcp', id });
+function tMcp(id) { vscode.postMessage({ type:'toggleMcp', id }); }
+function applyMcp(id, st) {
+  const d = document.getElementById('d-' + id);
+  const b = document.getElementById('b-' + id);
+  if (!d || !b) return;
+  d.className = 'dot ' + st;
+  const on = st === 'running' || st === 'starting';
+  b.textContent = on ? 'Stop' : 'Start';
+  b.classList.toggle('stop', on);
 }
 
-function applyMcpStatus(id, status) {
-  const dot = document.getElementById('dot-' + id);
-  const btn = document.getElementById('btn-' + id);
-  if (!dot || !btn) { return; }
-  dot.className = 'dot ' + status;
-  const running = status === 'running' || status === 'starting';
-  btn.textContent = running ? 'Stop' : 'Start';
-  btn.style.color = running ? 'var(--vscode-errorForeground,#f88)' : '';
-}
-
-// ── Config helpers ───────────────────────────────────────────────────────────
-function saveConfig() {
-  vscode.postMessage({
-    type: 'saveConfig',
-    config: {
-      backend:   document.getElementById('cfg-backend').value,
-      routerUrl: document.getElementById('cfg-url').value,
-      apiKey:    document.getElementById('cfg-key').value,
-    },
-  });
+// ── Status ───────────────────────────────────────────────────────────────────
+function setSt(txt) {
+  stextEl.textContent = txt;
+  spinEl.style.display = txt ? 'block' : 'none';
 }
 
 // ── Chat helpers ─────────────────────────────────────────────────────────────
-function setStatus(text) { statusBar.textContent = text; }
-
 function clearChat() {
-  messagesEl.innerHTML =
-    '<div class="placeholder">用自然语言描述你的 FPGA 设计需求…</div>';
-  firstMessage = true;
-  streamingDiv = null;
+  msgsEl.innerHTML = '';
+  msgsEl.appendChild(emptyEl);
+  emptyEl.style.display = 'flex';
+  hasMsgs = false; msgList = null; streaming = null;
+  sendBtn.disabled = false; setSt('');
+}
+function getList() {
+  if (!hasMsgs) {
+    emptyEl.style.display = 'none';
+    msgList = document.createElement('div');
+    msgList.className = 'msg-list';
+    msgsEl.appendChild(msgList);
+    hasMsgs = true;
+  }
+  return msgList;
+}
+function addMsg(text, role) {
+  const list = getList();
+  const g = document.createElement('div'); g.className = 'mg';
+  const r = document.createElement('div');
+  r.className = 'mg-role ' + (role === 'you' ? 'you' : 'ai');
+  r.textContent = role === 'you' ? 'You' : 'FPGA Vibe';
+  const b = document.createElement('div');
+  b.className = 'mg-body ' + role;
+  b.textContent = text;
+  g.appendChild(r); g.appendChild(b);
+  list.appendChild(g);
+  msgsEl.scrollTop = msgsEl.scrollHeight;
+  return b;
 }
 
-function addMessage(text, role) {
-  if (firstMessage) { messagesEl.innerHTML = ''; firstMessage = false; }
-  const div = document.createElement('div');
-  div.className = 'message ' + role;
-  div.textContent = text;
-  messagesEl.appendChild(div);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-  return div;
+function send() {
+  const ta = document.getElementById('msg-inp');
+  const t  = ta.value.trim(); if (!t) return;
+  addMsg(t, 'you');
+  vscode.postMessage({ type:'sendMessage', text:t });
+  ta.value = ''; resize(ta);
+  sendBtn.disabled = true; setSt('思考中…');
 }
-
-function sendMessage() {
-  const input = document.getElementById('message-input');
-  const text  = input.value.trim();
-  if (!text) { return; }
-  addMessage(text, 'user');
-  vscode.postMessage({ type: 'sendMessage', text });
-  input.value = '';
-  sendBtn.disabled = true;
-  setStatus('思考中…');
+function specToRtl() {
+  const ta = document.getElementById('msg-inp');
+  const sp = ta.value.trim();
+  if (!sp) { alert('请先在输入框中描述设计需求'); return; }
+  addMsg(sp, 'you');
+  ta.value = ''; resize(ta);
+  sendBtn.disabled = true; setSt('运行 Spec2RTL…');
+  vscode.postMessage({ type:'spec2rtl', spec:sp });
 }
-
-function triggerSpec2RTL() {
-  const input = document.getElementById('message-input');
-  const spec  = input.value.trim();
-  if (!spec) { alert('请先在输入框中描述设计需求'); return; }
-  addMessage(spec, 'user');
-  input.value = '';
-  sendBtn.disabled = true;
-  setStatus('运行 Spec2RTL…');
-  vscode.postMessage({ type: 'spec2rtl', spec });
+function resize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 110) + 'px';
 }
-
-document.getElementById('message-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { sendMessage(); }
+document.getElementById('msg-inp').addEventListener('input', function(){ resize(this); });
+document.getElementById('msg-inp').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
 });
 
-// ── Message handler ──────────────────────────────────────────────────────────
-window.addEventListener('message', (event) => {
-  const msg = event.data;
+// ── Message handler ───────────────────────────────────────────────────────────
+window.addEventListener('message', ev => {
+  const m = ev.data;
+  switch (m.type) {
 
-  if (msg.type === 'init') {
-    document.getElementById('cfg-backend').value = msg.config.backend;
-    document.getElementById('cfg-url').value     = msg.config.routerUrl;
-    // Don't pre-fill API key for security
-    for (const [id, status] of Object.entries(msg.mcpStatuses)) {
-      applyMcpStatus(id, status);
+    case 'init':
+      document.getElementById('cfg-backend').value = m.config.backend;
+      document.getElementById('cfg-url').value     = m.config.routerUrl;
+      for (const [id, st] of Object.entries(m.mcpStatuses)) applyMcp(id, st);
+      break;
+
+    case 'mcpStatus':  applyMcp(m.id, m.status); break;
+
+    case 'configSaved': {
+      const ok = document.getElementById('cfg-ok');
+      ok.style.display = 'inline';
+      setTimeout(() => { ok.style.display = 'none'; }, 2000);
+      break;
     }
-    return;
-  }
 
-  if (msg.type === 'mcpStatus') {
-    applyMcpStatus(msg.id, msg.status);
-    return;
-  }
+    case 'streamChunk':
+      if (!streaming) {
+        const list = getList();
+        const g = document.createElement('div'); g.className = 'mg';
+        const r = document.createElement('div'); r.className = 'mg-role ai'; r.textContent = 'FPGA Vibe';
+        streaming = document.createElement('div'); streaming.className = 'mg-body streaming';
+        g.appendChild(r); g.appendChild(streaming); list.appendChild(g);
+      }
+      streaming.textContent += m.chunk;
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+      break;
 
-  if (msg.type === 'configSaved') {
-    const el = document.getElementById('cfg-saved');
-    el.style.display = 'inline';
-    setTimeout(() => { el.style.display = 'none'; }, 2000);
-    return;
-  }
+    case 'streamEnd':
+      if (streaming) { streaming.classList.remove('streaming'); streaming = null; }
+      sendBtn.disabled = false; setSt(''); break;
 
-  if (msg.type === 'streamChunk') {
-    if (!streamingDiv) {
-      if (firstMessage) { messagesEl.innerHTML = ''; firstMessage = false; }
-      streamingDiv = document.createElement('div');
-      streamingDiv.className = 'message streaming';
-      messagesEl.appendChild(streamingDiv);
+    case 'response':
+      addMsg(m.text, m.role === 'error' ? 'err' : 'ai');
+      sendBtn.disabled = false; setSt(''); break;
+
+    case 'statusUpdate': setSt(m.text); break;
+
+    case 'spec2rtlResult': {
+      const rv = m.result;
+      const list = getList();
+      const g = document.createElement('div'); g.className = 'mg';
+      const r = document.createElement('div'); r.className = 'mg-role ai'; r.textContent = 'FPGA Vibe';
+      const sum = document.createElement('div'); sum.className = 'mg-body';
+      sum.textContent = 'Module: ' + rv.module_name +
+        '  Score: ' + rv.score.toFixed(0) + '/100  ' + (rv.passed ? '✓ PASS' : '✗ FAIL');
+      const code = document.createElement('div'); code.className = 'mg-code';
+      code.textContent = rv.rtl_code;
+      g.appendChild(r); g.appendChild(sum); g.appendChild(code);
+      list.appendChild(g);
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+      sendBtn.disabled = false; setSt(''); break;
     }
-    streamingDiv.textContent += msg.chunk;
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    return;
-  }
 
-  if (msg.type === 'streamEnd') {
-    if (streamingDiv) {
-      streamingDiv.classList.remove('streaming');
-      streamingDiv.classList.add('assistant');
-      streamingDiv = null;
+    case 'prefill': {
+      const ta = document.getElementById('msg-inp');
+      ta.value = m.text; resize(ta); ta.focus(); break;
     }
-    sendBtn.disabled = false;
-    setStatus('');
-    return;
-  }
-
-  if (msg.type === 'response') {
-    addMessage(msg.text, msg.role || 'assistant');
-    sendBtn.disabled = false;
-    setStatus('');
-    return;
-  }
-
-  if (msg.type === 'statusUpdate') {
-    setStatus(msg.text);
-    return;
-  }
-
-  if (msg.type === 'spec2rtlResult') {
-    const r = msg.result;
-    let summary = '=== Spec2RTL Result ===\\n';
-    summary += 'Module: ' + r.module_name + '  Score: ' + r.score.toFixed(0) + '/100\\n';
-    summary += 'Status: ' + (r.passed ? '✓ PASS' : '✗ FAIL') + '\\n';
-    if (r.declared_decisions?.length) {
-      summary += '\\nAutonomous decisions:\\n';
-      r.declared_decisions.forEach(d => { summary += '  • ' + d + '\\n'; });
-    }
-    summary += '\\n--- RTL Code ---\\n' + r.rtl_code;
-    if (firstMessage) { messagesEl.innerHTML = ''; firstMessage = false; }
-    const div = document.createElement('div');
-    div.className = 'message assistant rtl-block';
-    div.textContent = summary;
-    messagesEl.appendChild(div);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    sendBtn.disabled = false;
-    setStatus('');
-    return;
-  }
-
-  if (msg.type === 'prefill') {
-    document.getElementById('message-input').value = msg.text;
   }
 });
 
-// Signal that the webview is ready
-vscode.postMessage({ type: 'ready' });
+vscode.postMessage({ type:'ready' });
 </script>
 </body>
 </html>`;
