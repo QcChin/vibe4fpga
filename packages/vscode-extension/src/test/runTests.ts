@@ -12,7 +12,10 @@ async function main() {
         extensionDevelopmentPath,
         extensionTestsPath,
         // --disable-extensions prevents interference from other installed extensions
-        launchArgs: ['--disable-extensions'],
+        launchArgs: [
+            '--disable-extensions',
+            '--headless',          // suppress the VSCode window during test runs
+        ],
     });
 }
 
