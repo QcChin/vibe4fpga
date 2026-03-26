@@ -1,10 +1,29 @@
-.PHONY: install build watch lint clean \
+.PHONY: install install-uv install-node install-python \
+        build watch lint clean \
         dev-router dev-fpga-project-mcp dev-eda-bridge-mcp \
         dev-waveform-mcp dev-instrument-mcp dev-datasheet-mcp \
-        dev-quartus-mcp dev-yosys-mcp dev-collab-server
+        dev-quartus-mcp dev-yosys-mcp dev-collab-server dev-all
+
+# uv is installed to ~/.local/bin on macOS/Linux by the official installer.
+# Extend PATH so make (which uses /bin/sh) can find it regardless of shell config.
+export PATH := $(HOME)/.local/bin:$(HOME)/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$(PATH)
 
 # ── Installation ──────────────────────────────────────────────────────────────
-install: install-node install-python
+install: install-uv install-node install-python
+
+install-uv:
+	@if command -v uv >/dev/null 2>&1; then \
+		echo "uv $$(uv --version) already installed"; \
+	elif command -v brew >/dev/null 2>&1; then \
+		echo "Installing uv via Homebrew..."; \
+		brew install uv; \
+	elif command -v pip3 >/dev/null 2>&1; then \
+		echo "Installing uv via pip3..."; \
+		pip3 install uv --break-system-packages; \
+	else \
+		echo "Installing uv via official installer..."; \
+		curl -LsSf https://astral.sh/uv/install.sh | sh; \
+	fi
 
 install-node:
 	npm install
