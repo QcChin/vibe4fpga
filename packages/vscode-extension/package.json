@@ -57,6 +57,11 @@
           "type": "webview",
           "id": "vibe4fpga.chatPanel",
           "name": "Chat"
+        },
+        {
+          "type": "webview",
+          "id": "vibe4fpga.waveformPanel",
+          "name": "Waveform"
         }
       ]
     },

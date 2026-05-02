@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ChatViewProvider } from './panels/ChatViewProvider';
+import { WaveformViewProvider } from './panels/WaveformViewProvider';
 import { McpManager } from './services/McpManager';
 import { COMMANDS } from './commands';
 
@@ -17,6 +18,19 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.registerWebviewViewProvider(
             ChatViewProvider.viewType,
             provider,
+            { webviewOptions: { retainContextWhenHidden: true } },
+        ),
+    );
+
+    // ── Waveform / signal visualization panel ────────────────────────────────
+    const waveformProvider = new WaveformViewProvider(
+        context.extensionUri,
+        () => vscode.workspace.getConfiguration('vibe4fpga').get<string>('llmRouter.url', 'http://localhost:8765'),
+    );
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            WaveformViewProvider.viewType,
+            waveformProvider,
             { webviewOptions: { retainContextWhenHidden: true } },
         ),
     );
@@ -56,7 +70,7 @@ export function activate(context: vscode.ExtensionContext) {
         }),
 
         vscode.commands.registerCommand(COMMANDS.WAVEFORM_DEBUG, async () => {
-            vscode.window.showInformationMessage('WaveformDebug: available in Phase 2');
+            waveformProvider.focus();
         }),
     );
 
