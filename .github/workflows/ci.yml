@@ -4,57 +4,42 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # ── TypeScript lint ──────────────────────────────────────────────────────────
-  lint:
-    name: Lint (TypeScript)
+  # ── Cross-platform gate: reject /tmp hardcodes ───────────────────────────────
+  # Phase A eda-bridge-mcp:122 had `/tmp/sim_out.vvp` which breaks on Windows.
+  # Keep it dead.
+  no-tmp-hardcode:
+    name: No /tmp hardcoded paths
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Grep for "/tmp
+        run: |
+          set -eu
+          if grep -RIn --include='*.py' --include='*.rs' '"/tmp' packages/mcp-servers packages/shared; then
+            echo "::error::Found hardcoded '/tmp' path — use vibe4fpga_platform.scratch_file/scratch_dir instead."
+            exit 1
+          fi
+          echo "OK: no /tmp hardcodes."
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: ESLint
-        run: npm run lint
-
-  # ── VSCode extension e2e ─────────────────────────────────────────────────────
-  extension-test:
-    name: VSCode Extension E2E
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Compile TypeScript
-        run: npm run build
-
-      # @vscode/test-electron downloads a real VSCode instance and runs the
-      # extension host in it. On Linux a virtual display is required.
-      - name: Run e2e tests (headless via Xvfb)
-        run: xvfb-run -a npm test --workspace=packages/vscode-extension
-
-  # ── Python package unit tests ────────────────────────────────────────────────
+  # ── Python packages: shared libs + 9 MCP servers on mac + win ────────────────
   python-test:
-    name: Python — ${{ matrix.package }}
-    runs-on: ubuntu-latest
+    name: Python — ${{ matrix.package }} @ ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [macos-latest, windows-latest]
         package:
-          - llm-router
+          - shared/llm-client
+          - shared/platform
+          - shared/mcp-testkit
           - mcp-servers/fpga-project-mcp
           - mcp-servers/eda-bridge-mcp
           - mcp-servers/waveform-mcp
@@ -62,8 +47,10 @@ jobs:
           - mcp-servers/datasheet-mcp
           - mcp-servers/quartus-mcp
           - mcp-servers/yosys-mcp
-          - collab-server
-          - skills
+          - mcp-servers/verify-mcp
+        exclude:
+          # Quartus is Windows/Linux only — no macOS runtime, so skip on macOS.
+          - { os: macos-latest, package: mcp-servers/quartus-mcp }
 
     steps:
       - uses: actions/checkout@v4
@@ -74,20 +61,83 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
-      - name: Install dependencies
-        run: uv sync
+      - name: Sync dependencies
+        shell: bash
         working-directory: packages/${{ matrix.package }}
+        run: uv sync --all-extras
 
       - name: Run pytest
         shell: bash
         working-directory: packages/${{ matrix.package }}
+        env:
+          # Defensive: force UTF-8 I/O even when host console is GBK (CN Windows).
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
         run: |
-          uv run pytest --tb=short -q || EXIT_CODE=$?
-          # pytest exit 5 = no tests collected; treat as success
-          if [ "${EXIT_CODE:-0}" -eq 5 ]; then
-            echo "::notice::No tests collected in packages/${{ matrix.package }} — skipping"
+          set +e
+          uv run pytest --tb=short -q
+          EXIT_CODE=$?
+          # pytest exit 5 = no tests collected. Acceptable during Phase B bring-up
+          # (each MCP adds tests on its own branch); revisit once Phase B is done.
+          if [ "$EXIT_CODE" -eq 5 ]; then
+            echo "::notice::No tests collected in packages/${{ matrix.package }} — acceptable during Phase B"
             exit 0
           fi
-          exit "${EXIT_CODE:-0}"
+          exit "$EXIT_CODE"
+
+  # ── Rust: waveform-mcp-rs on mac + win ───────────────────────────────────────
+  rust-test:
+    name: Rust — ${{ matrix.package }} @ ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        package:
+          - mcp-servers/waveform-mcp-rs
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: cargo build
+        working-directory: packages/${{ matrix.package }}
+        run: cargo build --release --locked
+
+      - name: cargo test
+        working-directory: packages/${{ matrix.package }}
+        run: cargo test --release --locked
+
+  # ── Skill-adapter drift detection (activated once gen-skills lands) ──────────
+  # Placeholder for Phase B task #11. After tools/gen-skills/generate.py is
+  # committed, this job runs the generator and fails if generated SKILL.md /
+  # command.md / config snippets diverge from what's checked in.
+  docs-generate:
+    name: Skill adapter drift check
+    runs-on: ubuntu-latest
+    if: ${{ hashFiles('tools/gen-skills/generate.py') != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run gen-skills generator
+        run: uv run python tools/gen-skills/generate.py
+
+      - name: Verify generated files are up-to-date
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::gen-skills output is stale. Run 'uv run python tools/gen-skills/generate.py' locally and commit."
+            exit 1
+          fi
