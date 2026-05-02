@@ -51,3 +51,6 @@ qdrant_storage/
 # Secrets
 *.env.local
 .env.*.local
+
+# Claude
+CLAUDE.md
