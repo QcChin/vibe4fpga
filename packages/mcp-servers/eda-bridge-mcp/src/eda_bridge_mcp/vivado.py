@@ -1,19 +1,26 @@
-"""Vivado process control — batch mode and persistent TCL session.
+"""Vivado process control — batch mode synthesis.
 
-Three process communication modes (from design doc):
-  Batch mode      (vivado -mode batch)  : synthesis / implementation
-  Persistent mode (vivado -mode tcl)    : high-frequency interactive queries
-  Journal polling (watchdog file watch) : GUI observer mode, read-only
+Two process communication modes are supported at the moment:
+  Batch mode      (``vivado -mode batch``) : synthesis / implementation
+  Persistent mode (``vivado -mode tcl``)   : reserved for interactive queries
+
+Subprocess + scratch paths + tool discovery route through
+:mod:`vibe4fpga_platform` so Windows hosts get UTF-8 console, long-path
+prefixing, and ``.exe`` fallback without per-tool care.
 """
 
 from __future__ import annotations
 
-import asyncio
-import os
 import re
-import shutil
-import tempfile
 from pathlib import Path
+
+from vibe4fpga_platform import (
+    ProcessTimeoutError,
+    ToolNotFoundError,
+    require_tool,
+    run,
+    scratch_dir,
+)
 
 # TCL template for out-of-context synthesis
 _SYNTH_TCL = """\
@@ -31,59 +38,90 @@ _TIMING_PARSE_RE = re.compile(
 _UTIL_RE = re.compile(r"\|\s+([\w/ ]+?)\s+\|\s+(\d+)\s+\|\s+\d+\s+\|\s+(\d+)\s+\|")
 
 
-def _find_vivado() -> str:
-    """Locate Vivado executable; raises RuntimeError if not found."""
-    # Check env override first
-    vivado_path = os.getenv("VIVADO_PATH", "")
-    if vivado_path:
-        candidate = Path(vivado_path) / "bin" / "vivado"
-        if candidate.exists():
-            return str(candidate)
+def _find_vivado() -> Path:
+    """Locate the Vivado executable; raise :class:`RuntimeError` if missing.
 
-    if shutil.which("vivado"):
-        return "vivado"
+    Resolution order (via :func:`vibe4fpga_platform.require_tool`):
+        1. ``VIVADO_ROOT`` env var — if it points directly at the ``vivado``
+           binary, that path wins. If it points at an install root instead,
+           the sibling ``bin`` directory is added to the search path.
+        2. ``VIVADO_PATH`` env var (legacy) — treated as an install root whose
+           ``bin`` subdir is prepended to ``PATH``.
+        3. System ``PATH`` (with ``.exe`` fallback on Windows).
+    """
+    import os
 
-    raise RuntimeError(
-        "vivado not found. Set VIVADO_PATH in .env or add Vivado/bin to PATH."
-    )
+    extra_paths: list[Path] = []
+    for env_var in ("VIVADO_ROOT", "VIVADO_PATH"):
+        raw = os.environ.get(env_var, "").strip()
+        if not raw:
+            continue
+        candidate = Path(raw)
+        # Accept either the install root or the bin dir.
+        if (candidate / "bin").is_dir():
+            extra_paths.append(candidate / "bin")
+        else:
+            extra_paths.append(candidate)
+
+    try:
+        return require_tool("vivado", extra_paths=extra_paths or None)
+    except ToolNotFoundError as exc:
+        raise RuntimeError(
+            "vivado not found. Set VIVADO_ROOT to the Vivado install root or "
+            "add Vivado/bin to PATH."
+        ) from exc
 
 
 async def run_batch(tcl_script: str, work_dir: str | None = None) -> dict:
     """Run Vivado in batch mode with the given TCL script.
+
+    Args:
+        tcl_script: Full TCL source. Written to ``run.tcl`` inside ``work_dir``.
+        work_dir:   Optional directory to execute in. When omitted a fresh
+                    scratch directory is allocated via
+                    :func:`vibe4fpga_platform.scratch_dir` (auto-cleaned on
+                    process exit).
 
     Returns:
         {
             "returncode": int,
             "stdout":     str,
             "stderr":     str,
-            "work_dir":   str,
+            "work_dir":   str,   # absolute path — reports live here too
         }
     """
     vivado = _find_vivado()
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        wd = work_dir or tmp_dir
-        tcl_path = Path(wd) / "run.tcl"
-        tcl_path.write_text(tcl_script)
+    wd = Path(work_dir) if work_dir else scratch_dir("vibe4fpga_vivado_")
+    wd.mkdir(parents=True, exist_ok=True)
 
-        proc = await asyncio.create_subprocess_exec(
-            vivado,
-            "-mode", "batch",
-            "-source", str(tcl_path),
-            "-nojournal",
-            "-nolog",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=wd,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+    tcl_path = wd / "run.tcl"
+    tcl_path.write_text(tcl_script, encoding="utf-8")
 
+    cmd = [
+        vivado,
+        "-mode", "batch",
+        "-source", str(tcl_path),
+        "-nojournal",
+        "-nolog",
+    ]
+
+    try:
+        result = await run(cmd, cwd=wd, timeout=600)
+    except ProcessTimeoutError as exc:
         return {
-            "returncode": proc.returncode,
-            "stdout":     stdout.decode(),
-            "stderr":     stderr.decode(),
-            "work_dir":   wd,
+            "returncode": -1,
+            "stdout":     "",
+            "stderr":     f"vivado timed out after {exc.timeout}s",
+            "work_dir":   str(wd),
         }
+
+    return {
+        "returncode": result.returncode,
+        "stdout":     result.stdout_text(),
+        "stderr":     result.stderr_text(),
+        "work_dir":   str(wd),
+    }
 
 
 def build_synth_tcl(
@@ -93,7 +131,7 @@ def build_synth_tcl(
 ) -> str:
     """Generate TCL script for synthesis."""
     # Group files by extension
-    v_files  = [f for f in files if f.endswith((".v", ".sv"))]
+    v_files   = [f for f in files if f.endswith((".v", ".sv"))]
     vhd_files = [f for f in files if f.endswith((".vhd", ".vhdl"))]
 
     read_cmds = "\n".join(
@@ -109,7 +147,7 @@ def build_synth_tcl(
 
 
 def parse_timing_report(report_text: str) -> dict:
-    """Extract WNS and TNS from Vivado timing summary report."""
+    """Extract WNS and TNS from a Vivado timing summary report."""
     m = _TIMING_PARSE_RE.search(report_text)
     if m:
         return {"wns": float(m.group(1)), "tns": float(m.group(2))}
@@ -117,7 +155,7 @@ def parse_timing_report(report_text: str) -> dict:
 
 
 def parse_utilization_report(report_text: str) -> dict:
-    """Extract LUT/FF/BRAM/DSP utilization from Vivado utilization report."""
+    """Extract LUT/FF/BRAM/DSP utilization from a Vivado utilization report."""
     util: dict = {}
     resource_map = {
         "LUT as Logic":  "lut",
@@ -156,7 +194,7 @@ def parse_errors(stdout: str) -> list[dict]:
                 "category":   category,
                 "suggestion": suggestion,
             })
-    # Also capture raw ERROR lines
+    # Also capture raw ERROR lines.
     for line in stdout.splitlines():
         if line.startswith("ERROR:"):
             results.append({"raw": line.strip()})

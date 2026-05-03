@@ -1,0 +1,21 @@
+# Source-of-truth manifest consumed by tools/gen-skills/generate.py.
+# DO NOT hand-edit the generated SKILL.md / command.md / host configs.
+#
+# eda-bridge-mcp is a deterministic subprocess gateway (Vivado / Icarus /
+# Verilator) — it makes no LLM calls, so no skills are declared here. The
+# empty list is kept so the generator still emits a host-config entry for
+# this MCP's binary.
+
+mcp_name:  eda-bridge-mcp
+binary:    eda-bridge-mcp
+transport: stdio
+
+env:
+  required: []
+  optional:
+    - VIVADO_ROOT     # Xilinx Vivado install root (e.g. C:\Xilinx\Vivado\2024.2)
+    - VIVADO_PATH     # legacy alias; treated as install root too
+    # Icarus Verilog (iverilog/vvp), Verilator, and verible-verilog-lint are
+    # discovered via PATH; no env var required.
+
+skills: []

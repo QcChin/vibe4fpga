@@ -2,41 +2,47 @@
 
 Typical runtime: ~12ms per file.
 Catches ~40% of LLM-generated RTL issues at the Lint layer.
+
+Subprocess + tool-discovery go through :mod:`vibe4fpga_platform` so Windows
+hosts get UTF-8 console, PATHEXT fallback, and long-path prefixing for free.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
-import shutil
-from pathlib import Path
+
+from vibe4fpga_platform import ProcessTimeoutError, find_tool, run
 
 
 async def run_verilator_lint(files: list[str]) -> list[dict]:
-    """Run verilator --lint-only on the given files.
+    """Run ``verilator --lint-only`` on the given files.
 
     Returns structured findings with file/line/severity/message.
-    Returns a warning item if verilator is not installed.
+    Returns a single informational item if verilator is not installed.
     """
-    if not shutil.which("verilator"):
+    verilator = find_tool("verilator")
+    if verilator is None:
         return [{
             "tool": "verilator",
             "severity": "info",
             "message": "verilator not found in PATH — skipping Verilator lint",
         }]
 
-    cmd = ["verilator", "--lint-only", "-Wall", "--sv", *files]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    cmd = [verilator, "--lint-only", "-Wall", "--sv", *files]
+    try:
+        result = await run(cmd, timeout=30)
+    except ProcessTimeoutError as exc:
+        return [{
+            "tool": "verilator",
+            "severity": "error",
+            "message": f"verilator timed out after {exc.timeout}s",
+        }]
 
     findings: list[dict] = []
     # Verilator format: %Error/Warning: path/file.v:LINE:COL: message
     pattern = re.compile(r"%(Error|Warning)(?:-[A-Z]+)?: (.+):(\d+):(\d+): (.+)")
-    for line in stderr.decode().splitlines():
+    for line in result.stderr_text().splitlines():
         m = pattern.match(line)
         if m:
             findings.append({
@@ -52,25 +58,24 @@ async def run_verilator_lint(files: list[str]) -> list[dict]:
 
 
 async def run_verible_lint(files: list[str]) -> list[dict]:
-    """Run verible-verilog-lint (Google open-source AST-based linter).
+    """Run ``verible-verilog-lint`` (Google open-source AST-based linter).
 
     Returns empty list if verible is not installed (optional tool).
     """
-    if not shutil.which("verible-verilog-lint"):
+    verible = find_tool("verible-verilog-lint")
+    if verible is None:
         return []
 
-    cmd = ["verible-verilog-lint", *files]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+    cmd = [verible, *files]
+    try:
+        result = await run(cmd, timeout=30)
+    except ProcessTimeoutError:
+        return []
 
     findings: list[dict] = []
     # Verible format: path/file.v:LINE:COL: message [rule-name]
     pattern = re.compile(r"(.+):(\d+):(\d+):\s+(.+?)\s+\[(.+)\]")
-    for line in stdout.decode().splitlines():
+    for line in result.stdout_text().splitlines():
         m = pattern.match(line)
         if m:
             findings.append({
@@ -87,7 +92,7 @@ async def run_verible_lint(files: list[str]) -> list[dict]:
 
 
 async def lint_files(files: list[str]) -> dict:
-    """Run both verilator and verible lint in parallel, merge results.
+    """Run verilator and verible lint in parallel, merge results.
 
     Returns:
         {
@@ -98,7 +103,7 @@ async def lint_files(files: list[str]) -> dict:
         }
     """
     verilator_task = run_verilator_lint(files)
-    verible_task = run_verible_lint(files)
+    verible_task   = run_verible_lint(files)
 
     verilator_results, verible_results = await asyncio.gather(
         verilator_task, verible_task
