@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from vibe4fpga_platform import ToolNotFoundError
 
 from .qsf_manager import (
     QSFProject,
@@ -14,11 +14,34 @@ from .qsf_manager import (
     parse_qsf,
     set_pin_assignment,
 )
-from .tcl_runner import compile_project, program_device, run_timing_analysis, synthesize_only
+from .tcl_runner import (
+    compile_project,
+    detect_quartus_edition,
+    program_device,
+    quartus_sh_path,
+    resolve_quartus_sh,
+    run_timing_analysis,
+    synthesize_only,
+)
 
 mcp = FastMCP("quartus-mcp")
 
-QUARTUS_SH = os.getenv("QUARTUS_SH", "quartus_sh")
+
+def _missing_quartus_payload(exc: ToolNotFoundError) -> dict:
+    """Structured error shape when a tool invocation needs Quartus but it is
+    not installed / not on PATH. Exposed per plan R4 so hosts can distinguish
+    this from a real compilation failure.
+    """
+    return {
+        "success": False,
+        "error":   "quartus_sh_not_found",
+        "message": str(exc),
+        "hint": (
+            "Install Intel Quartus Prime (Pro or Lite) and either add its "
+            "``bin`` directory to PATH or set the QUARTUS_SH env var to the "
+            "absolute path of the ``quartus_sh`` executable."
+        ),
+    }
 
 
 # ── QSF management tools ──────────────────────────────────────────────────────
@@ -153,13 +176,17 @@ async def compile_quartus_project(
         timeout:      Max compilation time in seconds.
 
     Returns:
-        {success, errors, warnings, fmax_mhz, worst_slack_ns, utilization, log_excerpt}
+        {success, errors, warnings, fmax_mhz, worst_slack_ns, utilization, edition, log_excerpt}
     """
+    try:
+        qsh = resolve_quartus_sh()
+    except ToolNotFoundError as exc:
+        return _missing_quartus_payload(exc)
     return await compile_project(
         project_dir=project_dir,
         project_name=project_name,
         revision=revision,
-        quartus_sh=QUARTUS_SH,
+        quartus_sh=qsh,
         timeout=timeout,
     )
 
@@ -176,13 +203,17 @@ async def synthesize_quartus(
     Useful for quick error checking without full compilation.
 
     Returns:
-        {success, errors, warnings, log_excerpt}
+        {success, errors, warnings, edition, log_excerpt}
     """
+    try:
+        qsh = resolve_quartus_sh()
+    except ToolNotFoundError as exc:
+        return _missing_quartus_payload(exc)
     return await synthesize_only(
         project_dir=project_dir,
         project_name=project_name,
         revision=revision,
-        quartus_sh=QUARTUS_SH,
+        quartus_sh=qsh,
         timeout=timeout,
     )
 
@@ -197,13 +228,17 @@ async def get_timing_report(
     """Run TimeQuest Timing Analysis and return Fmax/slack summary.
 
     Returns:
-        {fmax_mhz, worst_slack_ns, timing_report, fmax_report}
+        {fmax_mhz, worst_slack_ns, timing_report, fmax_report, edition}
     """
+    try:
+        qsh = resolve_quartus_sh()
+    except ToolNotFoundError as exc:
+        return _missing_quartus_payload(exc)
     return await run_timing_analysis(
         project_dir=project_dir,
         project_name=project_name,
         revision=revision,
-        quartus_sh=QUARTUS_SH,
+        quartus_sh=qsh,
         timeout=timeout,
     )
 
@@ -217,9 +252,42 @@ async def program_fpga(sof_file: str, timeout: int = 60) -> dict:
         timeout:  Programming timeout in seconds.
 
     Returns:
-        {success, returncode, output}
+        {success, returncode, edition, output}
     """
-    return await program_device(sof_file=sof_file, quartus_sh=QUARTUS_SH, timeout=timeout)
+    try:
+        qsh = resolve_quartus_sh()
+    except ToolNotFoundError as exc:
+        return _missing_quartus_payload(exc)
+    return await program_device(sof_file=sof_file, quartus_sh=qsh, timeout=timeout)
+
+
+@mcp.tool()
+async def quartus_environment() -> dict:
+    """Report discovered Quartus installation metadata.
+
+    Runs ``quartus_sh --version`` (per plan R4) and returns the resolved
+    executable path plus edition (``Pro`` / ``Lite`` / ``Standard`` /
+    ``Unknown``). Emits a structured ``quartus_sh_not_found`` payload when
+    Quartus is absent so hosts can distinguish missing-vendor-tool from real
+    compilation failures.
+    """
+    qsh = quartus_sh_path()
+    if qsh is None:
+        return {
+            "available": False,
+            "error":     "quartus_sh_not_found",
+            "hint": (
+                "Install Intel Quartus Prime (Pro or Lite) and either add "
+                "its ``bin`` directory to PATH or set QUARTUS_SH to the "
+                "absolute executable path."
+            ),
+        }
+    edition = await detect_quartus_edition(qsh)
+    return {
+        "available":  True,
+        "quartus_sh": str(qsh),
+        "edition":    edition,
+    }
 
 
 def main() -> None:

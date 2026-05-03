@@ -1,0 +1,14 @@
+# Source-of-truth manifest consumed by tools/gen-skills/generate.py.
+# DO NOT hand-edit the generated SKILL.md / command.md / host configs.
+
+mcp_name:  quartus-mcp
+binary:    quartus-mcp
+transport: stdio
+
+env:
+  required: []
+  optional:
+    - QUARTUS_SH        # absolute path override for the quartus_sh executable
+    - QUARTUS_ROOTDIR   # Quartus install root (bin/ must be on PATH for vendor scripts)
+
+skills: []
