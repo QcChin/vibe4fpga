@@ -1,0 +1,256 @@
+name: Release
+
+# Triggered by pushing a tag like `v0.2.0` or by manual dispatch.
+# Publishes 10 Python wheels to PyPI via OIDC trusted publishing and
+# attaches Rust binaries for 2 targets to a GitHub Release.
+#
+# First-time setup is documented in docs/releasing.md.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build artefacts but skip publishing"
+        required:    false
+        default:     'false'
+        type:        choice
+        options:     ['false', 'true']
+
+permissions:
+  contents: read     # uploaded to at the GitHub-release step below
+
+jobs:
+  # ── Preflight: catch skill.yaml drift + /tmp regressions before shipping ───
+  preflight:
+    name: Preflight (drift + /tmp gates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Host-adapter drift check
+        run: uv run --script tools/gen-skills/generate.py --check
+
+      - name: "/tmp hardcode gate"
+        run: |
+          if grep -RIn --include='*.py' --include='*.rs' '"/tmp' packages/mcp-servers packages/shared; then
+            echo "::error::Found hardcoded '/tmp' path"
+            exit 1
+          fi
+
+  # ── Build + publish the 10 Python wheels ───────────────────────────────────
+  python-build:
+    name: Build ${{ matrix.package }}
+    needs: preflight
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - shared/llm-client
+          - shared/platform
+          - mcp-servers/fpga-project-mcp
+          - mcp-servers/eda-bridge-mcp
+          - mcp-servers/waveform-mcp
+          - mcp-servers/instrument-mcp
+          - mcp-servers/datasheet-mcp
+          - mcp-servers/quartus-mcp
+          - mcp-servers/yosys-mcp
+          - mcp-servers/verify-mcp
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Strip [tool.uv.sources] so the wheel resolves against PyPI
+        working-directory: packages/${{ matrix.package }}
+        shell: python
+        run: |
+          # uv's [tool.uv.sources] table is a dev-only override that routes
+          # path-deps to sibling packages in the monorepo. It must not appear
+          # in a published wheel's metadata — PyPI consumers don't have the
+          # sibling tree. Strip the table before `uv build` so the ordinary
+          # PEP 508 version spec wins.
+          import pathlib, re
+          p = pathlib.Path("pyproject.toml")
+          text = p.read_text(encoding="utf-8")
+          # Remove the entire [tool.uv.sources] block.
+          text = re.sub(
+              r"\n?\[tool\.uv\.sources\][^\[]*",
+              "\n",
+              text,
+          )
+          p.write_text(text, encoding="utf-8")
+
+      - name: uv build
+        working-directory: packages/${{ matrix.package }}
+        run: uv build
+
+      - name: Upload dist/ as artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name:       python-${{ matrix.package }}
+          path:       packages/${{ matrix.package }}/dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  python-publish:
+    name: Publish ${{ matrix.package }} to PyPI
+    needs: python-build
+    if: github.event_name == 'push' || github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write   # OIDC trusted publishing
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        package:
+          - shared/llm-client
+          - shared/platform
+          - mcp-servers/fpga-project-mcp
+          - mcp-servers/eda-bridge-mcp
+          - mcp-servers/waveform-mcp
+          - mcp-servers/instrument-mcp
+          - mcp-servers/datasheet-mcp
+          - mcp-servers/quartus-mcp
+          - mcp-servers/yosys-mcp
+          - mcp-servers/verify-mcp
+
+    steps:
+      - name: Download build artefact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-${{ matrix.package }}
+          path: dist
+
+      - name: Publish to PyPI (OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  # ── Build Rust binaries for Windows (x86_64) and macOS (arm64) ─────────────
+  rust-build:
+    name: Rust ${{ matrix.target }}
+    needs: preflight
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os:      windows-latest
+            target:  x86_64-pc-windows-msvc
+            archive: zip
+          - os:      macos-latest
+            target:  aarch64-apple-darwin
+            archive: tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target:    ${{ matrix.target }}
+
+      - name: cargo build --release
+        working-directory: packages/mcp-servers/waveform-mcp-rs
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        working-directory: packages/mcp-servers/waveform-mcp-rs
+        shell: bash
+        run: |
+          set -e
+          name="waveform-mcp-rs-${{ matrix.target }}"
+          bin="target/${{ matrix.target }}/release/waveform-mcp-rs"
+          [ "${{ matrix.os }}" = "windows-latest" ] && bin="${bin}.exe"
+          mkdir -p "artefacts/${name}"
+          cp "${bin}" "artefacts/${name}/"
+          cp README.md "artefacts/${name}/" 2>/dev/null || true
+          cd artefacts
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "${name}.zip" "${name}"
+          else
+            tar -czf "${name}.tar.gz" "${name}"
+          fi
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-${{ matrix.target }}
+          path: packages/mcp-servers/waveform-mcp-rs/artefacts/*.(zip|tar.gz)
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Attach Rust binaries + host-config snippets to the GitHub Release ──────
+  github-release:
+    name: GitHub Release
+    needs: [python-publish, rust-build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create release, upload assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Rust artefacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rust-*
+          path:    rust-artefacts
+          merge-multiple: true
+
+      - name: Create release + attach assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          tag="${GITHUB_REF_NAME}"
+          gh release create "$tag" \
+            --title "$tag" \
+            --notes-file <(cat <<'NOTES'
+          ## Install
+
+          ### Python MCPs (9 packages)
+          ```bash
+          uv tool install fpga-project-mcp
+          uv tool install eda-bridge-mcp
+          # ...repeat for the MCPs you need.
+          ```
+
+          ### Rust MCP
+          Download the appropriate archive below, extract, and put
+          `waveform-mcp-rs` on your PATH. Or install from source:
+          ```bash
+          cargo install --git https://github.com/naspter/vibe4fpga waveform-mcp-rs
+          ```
+
+          ## Configure your agent host
+
+          Ready-to-paste snippets for Claude Code / Codex / OpenCode are at
+          [`configs/`](../tree/$tag/configs) in the source tree. See the
+          integration guides under [`docs/`](../tree/$tag/docs).
+          NOTES
+            ) \
+            rust-artefacts/*.zip rust-artefacts/*.tar.gz \
+            configs/claude-mcp-config.json \
+            configs/codex-config.toml \
+            configs/opencode-mcp-config.yaml
