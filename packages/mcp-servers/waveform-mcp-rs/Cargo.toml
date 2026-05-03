@@ -1,8 +1,9 @@
 [package]
 name = "waveform-mcp-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "MCP server for VCD/FST waveform file parsing, written in Rust"
+description = "MCP server for VCD/FST waveform file parsing, written in Rust. Exposes 4 pure-parsing tools (parse_waveform, extract_signal_events, get_signal_stats, summarize_waveform)."
+license = "MIT"
 
 [[bin]]
 name = "waveform-mcp-rs"

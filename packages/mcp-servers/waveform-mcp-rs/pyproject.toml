@@ -1,0 +1,33 @@
+# NOTE: This pyproject.toml exists *only* to give `uv sync --extra dev`
+# enough metadata to install pytest + vibe4fpga-mcp-testkit for the
+# Python-side smoke tests under ./tests/. The canonical build system for
+# this package is Cargo — see Cargo.toml. No Python source lives in this
+# crate; `bypass-selection = true` keeps hatchling from hunting for a
+# package tree to wheel.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "waveform-mcp-rs-tests"
+version = "0.2.0"
+description = "Python-side smoke tests for the Rust waveform-mcp-rs binary."
+requires-python = ">=3.11,<3.13"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "vibe4fpga-mcp-testkit",
+]
+
+[tool.uv.sources]
+vibe4fpga-mcp-testkit = { path = "../../shared/mcp-testkit", editable = true }
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

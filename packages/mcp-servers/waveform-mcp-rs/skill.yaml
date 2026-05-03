@@ -1,0 +1,14 @@
+# Source-of-truth manifest consumed by tools/gen-skills/generate.py.
+# DO NOT hand-edit the generated SKILL.md / command.md / host configs.
+#
+# waveform-mcp-rs is the Rust-native VCD/FST parser MCP. It exposes pure
+# parsing tools with no LLM inference, so `skills: []` is intentional —
+# nothing to generate for Claude/OpenCode/Codex skill surfaces.
+
+mcp_name:  waveform-mcp-rs
+binary:    waveform-mcp-rs
+transport: stdio
+env:
+  required: []
+  optional: []
+skills: []
