@@ -36,11 +36,20 @@ from typing import Any
 # Each pattern matches one counter's worth of evidence when it matches a line.
 
 _RX_PASS = re.compile(
-    r"(?:^|\s|\*)(?:test\s+(?:\d+\s+)?passed|all\s+tests?\s+passed|\*{2,}\s*pass\b|^\s*PASS\s*$)",
+    r"(?:^|\s|\*|\])"
+    r"(?:test\s+(?:\d+\s+)?passed"
+    r"|all\s+tests?\s+passed"
+    r"|\*{2,}\s*pass\b"
+    r"|PASS\b"                 # matches "PASS", "PASS:", "PASS —"
+    r")",
     re.IGNORECASE | re.MULTILINE,
 )
 _RX_FAIL = re.compile(
-    r"(?:^|\s|\*)(?:test\s+(?:\d+\s+)?failed|\*{2,}\s*fail\b|^\s*FAIL\s*$)",
+    r"(?:^|\s|\*|\])"
+    r"(?:test\s+(?:\d+\s+)?failed"
+    r"|\*{2,}\s*fail\b"
+    r"|FAIL\b"                 # matches "FAIL", "FAIL:", "FAIL —"
+    r")",
     re.IGNORECASE | re.MULTILINE,
 )
 _RX_FATAL           = re.compile(r"\$fatal\b|\bUVM_FATAL\b",        re.IGNORECASE)
