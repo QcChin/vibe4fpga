@@ -1,0 +1,26 @@
+# Source-of-truth manifest consumed by tools/gen-skills/generate.py.
+# DO NOT hand-edit the generated SKILL.md / command.md / host configs.
+
+mcp_name:  instrument-mcp
+binary:    instrument-mcp
+transport: stdio
+
+env:
+  required: []
+  optional:
+    - VIBE4FPGA_LLM      # default model key (claude / gpt-4o / ollama / ...)
+    - ANTHROPIC_API_KEY  # required if VIBE4FPGA_LLM=claude (default)
+    - OPENAI_API_KEY     # required if VIBE4FPGA_LLM=openai or =deepseek
+
+skills:
+  - id:               instrument_analyze
+    tool:             analyze_instrument_diff
+    summary:          "Compare oscilloscope capture against simulation, classify waveform diffs into 7 categories (overshoot / offset / noise / drift / phase / amplitude / unknown), and recommend root-cause investigations."
+    claude_trigger:   "oscilloscope|scope|instrument|diff|classify waveform"
+    opencode_command: analyze-diff
+    codex_alias:      aid
+    notes: |
+      Accepts raw ``list[float]`` arrays OR file paths (CSV + VCD) OR a VISA
+      resource string for live SCPI capture. When VISA drivers are absent the
+      SCPI path surfaces a structured ``RuntimeError`` from ``_require_pyvisa``
+      — the CSV/array paths still work for Mac developers without NI-VISA.

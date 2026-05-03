@@ -22,21 +22,27 @@ Common SCPI waveform capture commands (instrument-agnostic):
 
 from __future__ import annotations
 
-import csv as csv_mod
-import io
-import os
-import tempfile
+from vibe4fpga_platform import scratch_file
 
 
 def _require_pyvisa():
+    """Import pyvisa with a structured error message when no backend is loaded.
+
+    Per risk R3 in the refactor plan: NI-VISA and Keysight VISA drivers are
+    vendor-specific and Windows-only. We do *not* swallow the ImportError —
+    callers see a ``RuntimeError`` with driver pointers so the host can
+    surface it to the user verbatim.
+    """
     try:
         import pyvisa
         return pyvisa
-    except ImportError:
+    except ImportError as exc:
         raise RuntimeError(
-            "pyvisa not installed. Run: pip install pyvisa pyvisa-py\n"
-            "For USB instruments also install: pip install pyusb libusb1"
-        )
+            "pyvisa backend not available. Install one of:\n"
+            "  * NI-VISA:       https://www.ni.com/visa (Windows admin install)\n"
+            "  * Keysight VISA: https://www.keysight.com/find/iosuite (Windows)\n"
+            "  * Pure-Python:   pip install pyvisa pyvisa-py pyusb libusb1"
+        ) from exc
 
 
 def connect(resource_string: str, timeout_ms: int = 5000) -> dict:
@@ -128,12 +134,12 @@ def capture_waveform(
             time_ns   = [(x_ori + i * x_inc) * 1e9 for i in range(len(voltage_v))]
 
         except Exception:
-            # Fallback: SAVe:WAVEform CSV (Tektronix style)
-            tmp_path = ""
+            # Fallback: SAVe:WAVEform CSV (Tektronix style). The scratch file
+            # is created inside the shared ``vibe4fpga_*`` scratch root and is
+            # cleaned up automatically on interpreter shutdown — no /tmp, no
+            # manual unlink, works identically on Windows and macOS.
             try:
-                with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                    tmp_path = tmp.name
-
+                tmp_path = scratch_file(".csv")
                 instr.write(f'SAV:WAV {ch_name},CSV,"{tmp_path}"')
 
                 # *OPC? blocks until operation complete; guard with a tighter timeout
@@ -144,16 +150,10 @@ def capture_waveform(
                     pass   # Tektronix may not ack; check file presence instead
 
                 from instrument_mcp.readers.generic import read_csv_auto
-                result = read_csv_auto(tmp_path, channel=channel - 1)
+                result = read_csv_auto(str(tmp_path), channel=channel - 1)
                 return {**result, "idn": idn, "vendor": "scpi_fallback"}
             except Exception as fallback_exc:
                 return {"error": f"SCPI WAV capture failed and CSV fallback also failed: {fallback_exc}"}
-            finally:
-                if tmp_path:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
 
         duration_ns = time_ns[-1] - time_ns[0] if len(time_ns) > 1 else 0.0
         sample_rate = (len(time_ns) - 1) / (duration_ns * 1e-9) if duration_ns > 0 else 0.0

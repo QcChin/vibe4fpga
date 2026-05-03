@@ -1,4 +1,20 @@
-"""instrument-mcp — Measurement Instrument Access MCP Server."""
+"""instrument-mcp — Measurement Instrument Access MCP Server.
+
+Exposes 7 I/O + analysis tools plus 1 LLM-backed skill tool:
+
+Waveform I/O (no LLM required):
+    read_csv_waveform           — parse oscilloscope CSV export
+    compute_fft_tool            — spectral analysis of a CSV waveform
+    list_visa_instruments       — enumerate VISA-accessible instruments
+    connect_instrument          — SCPI *IDN? handshake
+    capture_live_waveform       — live-capture a waveform via SCPI
+    align_with_simulation       — cross-correlate sim (VCD) vs. measurement
+    classify_differences_tool   — 7-category diff classifier (pure numpy)
+
+LLM-backed skill:
+    analyze_instrument_diff     — instrument_analyze: classify + root-cause
+                                  attribute a sim-vs-real waveform comparison.
+"""
 
 from __future__ import annotations
 
@@ -6,18 +22,22 @@ import logging
 
 import numpy as np
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from .aligner import compute_fft, cross_correlate_align
 from .readers.generic import read_csv_auto
 from .readers.rigol import read_rigol_csv
 from .readers.scpi import capture_waveform, connect, list_instruments
+from .skills.instrument_analyze.skill import run as instrument_analyze_run
 
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP("instrument-mcp")
 
 
-# ── File reading tools ────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# File reading tools
+# ═════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
 async def read_csv_waveform(
@@ -76,11 +96,18 @@ async def compute_fft_tool(
     )
 
 
-# ── SCPI live capture tools ───────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# SCPI live capture tools
+# ═════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
 async def list_visa_instruments() -> list[str]:
-    """List all VISA-accessible instruments on the system."""
+    """List all VISA-accessible instruments on the system.
+
+    Returns an empty list if no VISA backend (NI-VISA / Keysight / pyvisa-py)
+    is installed. See the README "Windows notes" section for driver install
+    pointers.
+    """
     return list_instruments()
 
 
@@ -119,7 +146,9 @@ async def capture_live_waveform(
     return capture_waveform(resource_string, channel=channel, timeout_ms=timeout_ms)
 
 
-# ── Alignment and comparison tools ───────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# Alignment and comparison tools
+# ═════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
 async def align_with_simulation(
@@ -186,8 +215,7 @@ async def align_with_simulation(
     )
 
 
-@mcp.tool()
-# ── Private difference detectors (one per category) ──────────────────────────
+# ── Private difference detectors (one per category, pure numpy, no LLM) ──────
 
 def _detect_rise_time_overshoot(diff, sim, rms_diff: float) -> dict | None:
     """Detect overshoot / rise-time mismatch at signal edges (expected)."""
@@ -259,6 +287,43 @@ def _detect_timing_drift(t, diff, rms_diff: float) -> dict | None:
     return None
 
 
+def _detect_phase_shift(sim, meas, rms_diff: float) -> dict | None:
+    """Detect a correct-shape-but-shifted-in-phase waveform (suspicious).
+
+    Correlation between shifted sim and meas remains high despite a large
+    pointwise RMS diff → classic phase offset of a few samples.
+    """
+    if len(sim) < 4 or len(meas) < 4 or len(sim) != len(meas):
+        return None
+    best_corr = -1.0
+    best_shift = 0
+    base_norm = float(np.sqrt(np.sum(sim ** 2) * np.sum(meas ** 2)) + 1e-12)
+    span = max(2, len(sim) // 10)
+    for shift in range(-span, span + 1):
+        if shift == 0:
+            continue
+        if shift > 0:
+            a = sim[:-shift]
+            b = meas[shift:]
+        else:
+            a = sim[-shift:]
+            b = meas[:shift]
+        if len(a) < 2:
+            continue
+        corr = float(np.sum(a * b) / base_norm)
+        if corr > best_corr:
+            best_corr = corr
+            best_shift = shift
+    if best_corr > 0.85 and abs(best_shift) > 0 and rms_diff > 0.05:
+        return {
+            "diff_type":      "phase_shift",
+            "classification": "suspicious",
+            "evidence":       f"Shape matches after shifting by {best_shift} samples (corr={best_corr:.3f})",
+            "suggestion":     "Check sampling alignment or pipeline latency in RTL.",
+        }
+    return None
+
+
 def _detect_missing_events(sim, meas) -> dict | None:
     """Detect missing logic pulses in measurement vs. simulation (anomalous)."""
     sim_pulses  = int(np.sum(np.diff((sim > 0.5).astype(int)) > 0))
@@ -282,12 +347,18 @@ async def classify_differences_tool(
     meas_v: list[float],
     clock_period_ns: float = 10.0,
 ) -> list[dict]:
-    """Classify simulation vs. real-measurement differences.
+    """Classify simulation vs. real-measurement differences into 7 categories.
 
-    Categorizes differences as:
-      expected  — physical effects (rise time, overshoot, noise, freq deviation)
-      suspicious — may indicate design issues (systematic offset, nonlinear drift)
-      anomalous — likely design issues (missing events, amplitude errors)
+    Categories covered:
+      * overshoot   (``rise_time_overshoot``)       — expected
+      * dc_offset   (``dc_offset``)                 — suspicious
+      * amplitude   (``amplitude_error``)           — anomalous
+      * noise       (``hf_noise_emi``)              — expected
+      * drift       (``freq_deviation_ppm`` /
+                      ``systematic_offset``)        — expected / suspicious
+      * phase       (``phase_shift``)               — suspicious
+      * unknown     (``missing_logic_event`` /
+                      ``unclassified``)             — anomalous / suspicious
 
     Args:
         diff_v:          Point-by-point difference (meas_aligned - sim).
@@ -318,6 +389,7 @@ async def classify_differences_tool(
         _detect_dc_offset(diff, rms_diff),
         _detect_hf_noise(t, diff, clock_period_ns),
         _detect_timing_drift(t, diff, rms_diff),
+        _detect_phase_shift(sim, meas, rms_diff),
         _detect_missing_events(sim, meas),
     ]:
         if detector_result is not None:
@@ -334,9 +406,142 @@ async def classify_differences_tool(
     return findings
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# LLM-backed skill — wraps instrument_analyze.skill.run behind a pydantic tool.
+# ═════════════════════════════════════════════════════════════════════════════
+
+class AnalyzeInstrumentDiffInput(BaseModel):
+    """Inputs for ``analyze_instrument_diff``.
+
+    The tool can be driven in two ways:
+
+    1. **Raw arrays** — pass ``oscilloscope_data`` + ``simulation_data`` as
+       ``list[float]`` and the tool will align, classify and attribute.
+    2. **File paths** — pass a string for ``oscilloscope_data`` (CSV path or
+       VISA resource string if it looks like one) and ``simulation_data``
+       (a path to a VCD file) + ``sim_signal``.
+    """
+
+    oscilloscope_data: list[float] | str = Field(
+        ...,
+        description=(
+            "Either a list of measurement voltages sampled on the time axis "
+            "implied by ``clock_period_ns`` and ``meas_channel``, or a path "
+            "to an oscilloscope CSV export, or a VISA resource string for "
+            "live SCPI capture (must start with 'TCPIP', 'USB', or 'GPIB')."
+        ),
+    )
+    simulation_data: list[float] | str = Field(
+        ...,
+        description=(
+            "Either a list of simulation voltages (must match length of "
+            "``oscilloscope_data`` when both are lists) or a path to a VCD "
+            "file whose signal ``sim_signal`` will be loaded."
+        ),
+    )
+    sim_signal: str = Field(
+        "",
+        description=(
+            "Signal name inside the VCD file. Required when ``simulation_data`` "
+            "is a VCD path; ignored when ``simulation_data`` is a list."
+        ),
+    )
+    meas_channel:    int   = Field(1,    description="Oscilloscope channel number (1-based).")
+    meas_vendor:     str   = Field("auto", description='CSV vendor hint: "auto" | "rigol" | "generic".')
+    clock_period_ns: float = Field(10.0, description="Clock period (ns) used by the diff classifier.")
+    model:           str   = Field("claude", description="LLM model key (see vibe4fpga-llm-client registry).")
+    timeout_ms:      int   = Field(10000, description="SCPI capture timeout (ignored for file inputs).")
+
+
+def _looks_like_visa_resource(s: str) -> bool:
+    upper = s.strip().upper()
+    return upper.startswith(("TCPIP", "USB", "GPIB", "ASRL"))
+
+
+@mcp.tool()
+async def analyze_instrument_diff(inputs: AnalyzeInstrumentDiffInput) -> dict:
+    """Compare an oscilloscope capture against simulation data and root-cause the diff.
+
+    Runs the ``instrument_analyze`` skill: align → classify into 7 categories
+    → LLM attribution. When the inputs are raw ``list[float]`` arrays the
+    alignment + classification run directly on them without touching the
+    filesystem; when they are paths the loaders in
+    :mod:`instrument_mcp.readers` and :mod:`waveform_mcp.parser` are used
+    (the latter requires the waveform-mcp package to be importable).
+
+    Returns:
+        ``{alignment, diff_findings, summary, llm_analysis, report_md}``.
+    """
+    osc = inputs.oscilloscope_data
+    sim = inputs.simulation_data
+
+    # ── Raw-arrays branch — do the align+classify here, then hand an already
+    # populated ``alignment`` + ``diff_findings`` pair to the skill so it only
+    # runs the LLM attribution + report stage. ───────────────────────────────
+    if isinstance(osc, list) and isinstance(sim, list):
+        if not osc or not sim:
+            return {"error": "oscilloscope_data and simulation_data must be non-empty lists"}
+        # Build a shared time axis assuming sample index * clock_period_ns.
+        length = min(len(osc), len(sim))
+        dt_ns = max(inputs.clock_period_ns, 1e-6)
+        time_ns = [i * dt_ns for i in range(length)]
+        osc_trim = osc[:length]
+        sim_trim = sim[:length]
+        alignment = cross_correlate_align(
+            sim_time_ns=time_ns,
+            sim_voltage=sim_trim,
+            meas_time_ns=time_ns,
+            meas_voltage=osc_trim,
+        )
+        diff_findings = await classify_differences_tool(
+            diff_v=alignment["diff_v"],
+            time_ns=alignment["time_ns"],
+            sim_v=alignment["sim_v_aligned"],
+            meas_v=alignment["aligned_meas_v"],
+            clock_period_ns=inputs.clock_period_ns,
+        )
+        return await instrument_analyze_run(
+            sim_signal=inputs.sim_signal or "raw_array",
+            clock_period_ns=inputs.clock_period_ns,
+            model=inputs.model,
+            alignment=alignment,
+            diff_findings=diff_findings,
+        )
+
+    # ── File / resource branch ───────────────────────────────────────────────
+    if not isinstance(osc, str) or not isinstance(sim, str):
+        return {
+            "error": (
+                "oscilloscope_data and simulation_data must be either both "
+                "list[float] or both strings (paths / resource)."
+            )
+        }
+
+    kwargs: dict = {
+        "sim_vcd_file":    sim,
+        "sim_signal":      inputs.sim_signal,
+        "meas_channel":    inputs.meas_channel,
+        "meas_vendor":     inputs.meas_vendor,
+        "clock_period_ns": inputs.clock_period_ns,
+        "model":           inputs.model,
+        "timeout_ms":      inputs.timeout_ms,
+    }
+    if _looks_like_visa_resource(osc):
+        kwargs["scpi_resource"] = osc
+    else:
+        kwargs["meas_file"] = osc
+
+    return await instrument_analyze_run(**kwargs)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Entry point
+# ═════════════════════════════════════════════════════════════════════════════
+
 def main() -> None:
+    """Console-script entry point for ``instrument-mcp``."""
     mcp.run()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":   # pragma: no cover
     main()

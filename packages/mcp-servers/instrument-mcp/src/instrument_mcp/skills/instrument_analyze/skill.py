@@ -2,20 +2,23 @@
 
 Flow:
   1. Load measurement waveform (CSV or SCPI live)
-  2. Load simulation waveform from VCD (via instrument-mcp or direct)
+  2. Load simulation waveform from VCD (via waveform-mcp sidecar if available)
   3. Time-domain alignment via cross-correlation
-  4. Classify differences (5 categories: expected / suspicious / anomalous)
-  5. LLM root cause attribution with full context
-  6. Return structured report with actionable conclusions
+  4. Classify differences into 7 categories (pure numpy, no LLM):
+     overshoot / dc_offset / noise / drift / phase / amplitude / unknown
+  5. LLM root-cause attribution for suspicious/anomalous findings
+  6. Return a structured report with actionable conclusions
 """
 
 from __future__ import annotations
 
+import csv as csv_mod
 import json
-import re
+from typing import Any
 
-import httpx
+from vibe4fpga_platform import scratch_file
 
+from .._llm import call_llm, parse_json_response
 from .classifier import enrich_findings, summarize_findings
 
 INSTRUMENT_ANALYZE_SYSTEM = """\
@@ -63,183 +66,218 @@ Perform root cause attribution for each suspicious/anomalous finding.
 """
 
 
-async def run(
-    meas_file: str | None = None,
-    sim_vcd_file: str | None = None,
-    sim_signal: str = "",
-    meas_channel: int = 1,
-    meas_vendor: str = "auto",
-    scpi_resource: str | None = None,
-    clock_period_ns: float = 10.0,
-    router_url: str = "http://localhost:8765",
-    model: str = "claude",
-    instrument_mcp_url: str | None = None,
+def _load_measurement(
+    meas_file: str | None,
+    scpi_resource: str | None,
+    meas_channel: int,
+    meas_vendor: str,
+    timeout_ms: int,
 ) -> dict:
-    """Run the InstrumentAnalyze skill.
+    """Load a measurement waveform from CSV or SCPI live capture.
+
+    When a ``scpi_resource`` is given, the live capture result is written to a
+    platform-managed scratch CSV so downstream code paths that expect a file
+    on disk (e.g. the aligner) keep working on Windows without touching ``/tmp``.
+    """
+    # Prefer SCPI live capture when a resource string is supplied.
+    if scpi_resource:
+        try:
+            from ...readers.scpi import capture_waveform
+        except ImportError as exc:
+            return {"error": f"SCPI reader unavailable: {exc}"}
+
+        result = capture_waveform(
+            scpi_resource, channel=meas_channel, timeout_ms=timeout_ms
+        )
+        if "error" in result:
+            return result
+
+        # Persist to a scratch CSV so callers can subsequently feed it to the
+        # aligner; cleanup is handled automatically at process exit.
+        csv_path = scratch_file(".csv")
+        with csv_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv_mod.writer(fh)
+            for t_ns, v in zip(result["time_ns"], result["voltage_v"]):
+                writer.writerow([t_ns, v])
+        result["source_csv"] = str(csv_path)
+        return result
+
+    if not meas_file:
+        return {"error": "No measurement source provided (meas_file or scpi_resource)"}
+
+    try:
+        from ...readers.generic import read_csv_auto
+        from ...readers.rigol import read_rigol_csv
+    except ImportError as exc:
+        return {"error": f"CSV reader unavailable: {exc}"}
+
+    if meas_vendor == "rigol":
+        return read_rigol_csv(meas_file, channel=f"CH{meas_channel}")
+    if meas_vendor == "auto":
+        try:
+            with open(meas_file, "r", errors="replace") as f:
+                head = f.read(256)
+            if "#Model" in head or "#Channel" in head or "#SampleRate" in head:
+                return read_rigol_csv(meas_file, channel=f"CH{meas_channel}")
+        except OSError:
+            pass
+    return read_csv_auto(meas_file, channel=meas_channel - 1)
+
+
+def _load_sim_signal(sim_vcd_file: str, sim_signal: str) -> dict:
+    """Pull a named signal out of a VCD file via the waveform-mcp parser.
+
+    Returns ``{"sim_time_ns": [...], "sim_voltage": [...]}`` on success or
+    ``{"error": "..."}`` when the sidecar is unavailable or the signal
+    cannot be located.
+    """
+    try:
+        from waveform_mcp.parser import parse_waveform as parse_vcd  # type: ignore
+    except ImportError:
+        return {
+            "error": (
+                "waveform-mcp not installed — install the sidecar "
+                "(`uv tool install waveform-mcp`) to parse VCD files."
+            )
+        }
+
+    vcd_meta = parse_vcd(sim_vcd_file)
+    sig = vcd_meta.signals.get(sim_signal)
+    if sig is None:
+        matches = [n for n in vcd_meta.signals if sim_signal in n]
+        if not matches:
+            return {"error": f"Signal '{sim_signal}' not found in {sim_vcd_file}"}
+        sig = vcd_meta.signals[matches[0]]
+
+    sim_tv = sig.tv
+    sim_time_ns = [t for t, _ in sim_tv]
+    sim_voltage: list[float] = []
+    for _, v in sim_tv:
+        try:
+            sim_voltage.append(float(int(v, 2)) if set(v).issubset("01xz") else float(v))
+        except (ValueError, TypeError):
+            sim_voltage.append(0.0)
+    return {"sim_time_ns": sim_time_ns, "sim_voltage": sim_voltage}
+
+
+async def run(
+    meas_file:        str | None = None,
+    sim_vcd_file:     str | None = None,
+    sim_signal:       str        = "",
+    meas_channel:     int        = 1,
+    meas_vendor:      str        = "auto",
+    scpi_resource:    str | None = None,
+    clock_period_ns:  float      = 10.0,
+    model:            str        = "claude",
+    timeout_ms:       int        = 10000,
+    alignment:        dict[str, Any] | None = None,
+    diff_findings:    list[dict] | None = None,
+) -> dict:
+    """Run the InstrumentAnalyze skill end-to-end.
+
+    Typical invocation paths:
+
+    * **Pre-classified** — caller already ran ``align_with_simulation`` and
+      ``classify_differences_tool`` and passes ``alignment`` + ``diff_findings``.
+      Only the LLM root-cause attribution is performed.
+    * **From file/VCD** — caller passes ``meas_file`` (or ``scpi_resource``)
+      together with ``sim_vcd_file`` + ``sim_signal``. The skill runs the full
+      load → align → classify → attribute pipeline in-process. Requires the
+      waveform-mcp Python package to be importable for VCD parsing.
 
     Args:
-        meas_file:          Path to oscilloscope CSV export.
-        sim_vcd_file:       Path to VCD simulation file.
-        sim_signal:         Signal name in VCD to compare against measurement.
-        meas_channel:       Oscilloscope channel (1-based).
-        meas_vendor:        CSV vendor hint ("auto" | "rigol" | "generic").
-        scpi_resource:      VISA resource for live capture (overrides meas_file).
-        clock_period_ns:    Clock period for difference analysis context.
-        router_url:         LLM Router URL.
-        instrument_mcp_url: instrument-mcp URL (uses direct import if None).
+        meas_file:       Path to oscilloscope CSV export.
+        sim_vcd_file:    Path to VCD simulation file.
+        sim_signal:      Signal name in VCD to compare against measurement.
+        meas_channel:    Oscilloscope channel (1-based).
+        meas_vendor:     CSV vendor hint ("auto" | "rigol" | "generic").
+        scpi_resource:   VISA resource for live capture (overrides meas_file).
+        clock_period_ns: Clock period for difference analysis context.
+        model:           LLM model key understood by ``vibe4fpga-llm-client``.
+        timeout_ms:      SCPI capture timeout (ignored for file-based loads).
+        alignment:       Pre-computed alignment result (skip load/align stages).
+        diff_findings:   Pre-computed classifier output (skip load/align/classify).
 
     Returns:
         {
-            "alignment":       {offset_ns, correlation_peak, ...},
-            "diff_findings":   [{diff_type, classification, evidence, suggestion}],
-            "summary":         {total_findings, by_classification, overall},
-            "llm_analysis":    {overall_verdict, confidence, findings, summary},
-            "report_md":       str,
+            "alignment":     {...} or {"error": "..."},
+            "diff_findings": [{diff_type, classification, evidence, suggestion}],
+            "summary":       {total_findings, by_classification, overall},
+            "llm_analysis":  {overall_verdict, confidence, findings, summary},
+            "report_md":     str,
         }
     """
-    # ── Step 1 & 2: Load data via instrument-mcp or direct ────────────────────
-    alignment: dict = {}
-    raw_diff_findings: list[dict] = []
-
-    if instrument_mcp_url:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            if scpi_resource:
-                # Live capture
-                r = await client.post(
-                    f"{instrument_mcp_url}/tools/capture_live_waveform",
-                    json={"resource_string": scpi_resource, "channel": meas_channel},
-                )
-                if r.status_code == 200:
-                    meas_data = r.json()
-                    # Write to temp CSV and use align endpoint
-                    import tempfile, csv as csv_mod
-                    with tempfile.NamedTemporaryFile(
-                        mode="w", suffix=".csv", delete=False
-                    ) as tmp:
-                        writer = csv_mod.writer(tmp)
-                        for t_ns, v in zip(meas_data["time_ns"], meas_data["voltage_v"]):
-                            writer.writerow([t_ns, v])
-                        meas_file = tmp.name
-
-            if meas_file and sim_vcd_file:
-                r = await client.post(
-                    f"{instrument_mcp_url}/tools/align_with_simulation",
-                    json={
-                        "meas_file":    meas_file,
-                        "sim_vcd_file": sim_vcd_file,
-                        "sim_signal":   sim_signal,
-                        "meas_channel": meas_channel,
-                        "meas_vendor":  meas_vendor,
-                    },
-                )
-                if r.status_code == 200:
-                    alignment = r.json()
-
-                # Classify differences
-                if alignment and "diff_v" in alignment:
-                    r2 = await client.post(
-                        f"{instrument_mcp_url}/tools/classify_differences_tool",
-                        json={
-                            "diff_v":          alignment["diff_v"],
-                            "time_ns":         alignment["time_ns"],
-                            "sim_v":           alignment["sim_v_aligned"],
-                            "meas_v":          alignment["aligned_meas_v"],
-                            "clock_period_ns": clock_period_ns,
-                        },
-                    )
-                    if r2.status_code == 200:
-                        raw_diff_findings = r2.json()
-
-    else:
-        # Direct implementation (no MCP server)
-        try:
-            from instrument_mcp.aligner import cross_correlate_align
-            from instrument_mcp.readers.generic import read_csv_auto
-            from instrument_mcp.readers.rigol import read_rigol_csv
-            from waveform_mcp.parser import parse_waveform as parse_vcd
-
-            if meas_file:
-                meas_data = read_csv_auto(meas_file, channel=meas_channel - 1)
+    # ── Steps 1–3: Load + align (only if caller didn't pre-compute) ──────────
+    if alignment is None:
+        meas = _load_measurement(
+            meas_file,
+            scpi_resource,
+            meas_channel,
+            meas_vendor,
+            timeout_ms,
+        )
+        if "error" in meas:
+            alignment = meas
+        elif sim_vcd_file:
+            sim = _load_sim_signal(sim_vcd_file, sim_signal)
+            if "error" in sim:
+                alignment = sim
             else:
-                return {"error": "No measurement source provided (meas_file or scpi_resource)"}
-
-            if sim_vcd_file:
-                vcd_meta = parse_vcd(sim_vcd_file)
-                sig = vcd_meta.signals.get(sim_signal)
-                if sig is None:
-                    matches = [n for n in vcd_meta.signals if sim_signal in n]
-                    sig = vcd_meta.signals[matches[0]] if matches else None
-                if sig:
-                    sim_tv = sig.tv
-                    sim_time_ns = [t for t, _ in sim_tv]
-                    sim_voltage = []
-                    for _, v in sim_tv:
-                        try:
-                            sim_voltage.append(float(int(v, 2)) if set(v).issubset("01xz") else float(v))
-                        except (ValueError, TypeError):
-                            sim_voltage.append(0.0)
-
-                    alignment = cross_correlate_align(
-                        sim_time_ns=sim_time_ns,
-                        sim_voltage=sim_voltage,
-                        meas_time_ns=meas_data["time_ns"],
-                        meas_voltage=meas_data["voltage_v"],
-                    )
-
-            # Classify
-            if alignment and "diff_v" in alignment:
-                from instrument_mcp.server import classify_differences_tool
-                import asyncio
-                raw_diff_findings = await classify_differences_tool(
-                    diff_v=alignment["diff_v"],
-                    time_ns=alignment["time_ns"],
-                    sim_v=alignment["sim_v_aligned"],
-                    meas_v=alignment["aligned_meas_v"],
-                    clock_period_ns=clock_period_ns,
+                from ...aligner import cross_correlate_align
+                alignment = cross_correlate_align(
+                    sim_time_ns=sim["sim_time_ns"],
+                    sim_voltage=sim["sim_voltage"],
+                    meas_time_ns=meas["time_ns"],
+                    meas_voltage=meas["voltage_v"],
                 )
-        except ImportError as exc:
-            alignment = {"error": f"instrument_mcp or waveform_mcp not available: {exc}"}
+        else:
+            alignment = {"error": "No sim_vcd_file provided — nothing to align against"}
 
-    # ── Step 4: Enrich findings ───────────────────────────────────────────────
-    findings = enrich_findings(raw_diff_findings)
-    summary  = summarize_findings(findings)
+    # ── Step 4: Classify differences (only if caller didn't pre-compute) ─────
+    if diff_findings is None:
+        diff_findings = []
+        if alignment and "diff_v" in alignment and "error" not in alignment:
+            # Defer import to avoid pulling the full server module at import time.
+            from ...server import classify_differences_tool
+            diff_findings = await classify_differences_tool(
+                diff_v=alignment["diff_v"],
+                time_ns=alignment["time_ns"],
+                sim_v=alignment["sim_v_aligned"],
+                meas_v=alignment["aligned_meas_v"],
+                clock_period_ns=clock_period_ns,
+            )
+
+    findings = enrich_findings(diff_findings or [])
+    summary = summarize_findings(findings)
     finding_dicts = [f.to_dict() for f in findings]
 
-    # ── Step 5: LLM root cause attribution ───────────────────────────────────
+    # ── Step 5: LLM root-cause attribution ───────────────────────────────────
     llm_analysis: dict = {}
     if findings:
-        duration_ns = (alignment.get("time_ns") or [0, 0])
-        duration_ns = duration_ns[-1] - duration_ns[0] if len(duration_ns) > 1 else 0
+        time_axis = (alignment or {}).get("time_ns") or [0, 0]
+        duration_ns = time_axis[-1] - time_axis[0] if len(time_axis) > 1 else 0
 
         prompt = INSTRUMENT_ANALYZE_PROMPT.format(
-            offset_ns=alignment.get("offset_ns", 0),
-            offset_samples=alignment.get("offset_samples", 0),
-            correlation_peak=alignment.get("correlation_peak", 0),
+            offset_ns=(alignment or {}).get("offset_ns", 0) or 0,
+            offset_samples=(alignment or {}).get("offset_samples", 0) or 0,
+            correlation_peak=(alignment or {}).get("correlation_peak", 0) or 0,
             diff_findings_json=json.dumps(finding_dicts, indent=2),
             signal_name=sim_signal or "unknown",
             duration_ns=duration_ns,
             clock_period_ns=clock_period_ns,
         )
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{router_url}/chat",
-                json={
-                    "messages":    [{"role": "user", "content": prompt}],
-                    "system":      INSTRUMENT_ANALYZE_SYSTEM,
-                    "model":       model,
-                    "temperature": 0.2,
-                    "stream":      False,
-                },
-            )
-            if resp.status_code == 200:
-                raw = resp.json()["content"]
-                raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
-                raw = re.sub(r"```\s*$", "", raw.strip(), flags=re.MULTILINE)
-                try:
-                    llm_analysis = json.loads(raw.strip())
-                except json.JSONDecodeError:
-                    llm_analysis = {"raw": raw}
+        raw = await call_llm(
+            messages=[{"role": "user", "content": prompt}],
+            system=INSTRUMENT_ANALYZE_SYSTEM,
+            model=model,
+            temperature=0.2,
+        )
+
+        try:
+            llm_analysis = parse_json_response(raw)
+        except json.JSONDecodeError:
+            llm_analysis = {"raw": raw}
 
     # ── Step 6: Build Markdown report ────────────────────────────────────────
     report_lines = [
@@ -248,9 +286,9 @@ async def run(
         f"**Signal:** `{sim_signal or 'unknown'}`  |  "
         f"**Overall:** {summary['overall'].upper()}",
         "",
-        f"### Alignment",
-        f"- Time offset: **{alignment.get('offset_ns', 'N/A')} ns**",
-        f"- Correlation: **{alignment.get('correlation_peak', 'N/A')}**",
+        "### Alignment",
+        f"- Time offset: **{(alignment or {}).get('offset_ns', 'N/A')} ns**",
+        f"- Correlation: **{(alignment or {}).get('correlation_peak', 'N/A')}**",
         "",
         "### Difference Summary",
         f"- Expected:   {summary['by_classification'].get('expected', 0)}",
@@ -263,14 +301,14 @@ async def run(
 
     if llm_analysis.get("findings"):
         report_lines += ["", "### Action Items"]
-        for f in llm_analysis["findings"]:
+        for item in llm_analysis["findings"]:
             report_lines.append(
-                f"- **{f.get('diff_type', '?')}**: {f.get('action', '')} "
-                f"[RTL change: {f.get('rtl_change', '?')}]"
+                f"- **{item.get('diff_type', '?')}**: {item.get('action', '')} "
+                f"[RTL change: {item.get('rtl_change', '?')}]"
             )
 
     return {
-        "alignment":     alignment,
+        "alignment":     alignment or {},
         "diff_findings": finding_dicts,
         "summary":       summary,
         "llm_analysis":  llm_analysis,

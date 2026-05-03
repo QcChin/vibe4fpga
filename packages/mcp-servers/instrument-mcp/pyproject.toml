@@ -4,9 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "instrument-mcp"
-version = "0.1.0"
-description = "Measurement Instrument Access MCP Server (oscilloscope / spectrum analyzer)"
-requires-python = ">=3.11"
+version = "0.2.0"
+description = "MCP server for measurement instrument access (oscilloscope / spectrum analyzer) with a sim-vs-real diff classifier skill (instrument_analyze)."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "vibe4fpga contributors" }]
+keywords = ["mcp", "fpga", "oscilloscope", "scpi", "visa", "waveform", "verification"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+]
 dependencies = [
     "mcp>=1.0.0",
     "pydantic>=2.6.0",
@@ -14,13 +25,37 @@ dependencies = [
     "numpy>=1.26.0",
     "pandas>=2.2.0",
     "scipy>=1.13.0",
+    "vibe4fpga-llm-client>=0.1.0",
+    "vibe4fpga-platform>=0.1.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "ruff>=0.4.0"]
+# pyvisa is already a base dependency above because it is import-time-needed by
+# the SCPI readers. If a downstream consumer wants a reduced install without
+# any VISA wheels they can `pip uninstall pyvisa` — the capture / list tools
+# will surface a structured error (see risk R3 in the refactor plan).
+# NI-VISA or Keysight VISA driver install on Windows is documented in README.md
+# under "Windows notes".
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+    "vibe4fpga-mcp-testkit",
+]
 
 [project.scripts]
 instrument-mcp = "instrument_mcp.server:main"
 
+[tool.uv.sources]
+vibe4fpga-llm-client  = { path = "../../shared/llm-client",  editable = true }
+vibe4fpga-platform    = { path = "../../shared/platform",    editable = true }
+vibe4fpga-mcp-testkit = { path = "../../shared/mcp-testkit", editable = true }
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/instrument_mcp"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
