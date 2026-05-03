@@ -1,16 +1,25 @@
-"""waveform-mcp — Simulation Waveform Parsing MCP Server."""
+"""waveform-mcp — Simulation Waveform Parsing MCP Server.
+
+Exposes:
+    Parsing + compression tools (no LLM required):
+        parse_waveform_tool, extract_signal_events, decode_axi_tool,
+        summarize_for_llm, map_signal_to_rtl
+    LLM-backed skill (requires llm-client env setup):
+        debug_waveform — waveform_debug skill (5 detectors + LLM reasoning)
+"""
 
 from __future__ import annotations
 
 import re
-from functools import lru_cache
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, Field
 
 from .axi_decoder import decode_axi
 from .compressor import compress_for_llm, l1_compress_all, l1_sample
 from .parser import parse_waveform
+from .skills.waveform_debug.skill import run as waveform_debug_run
 
 mcp = FastMCP("waveform-mcp")
 
@@ -227,9 +236,52 @@ async def map_signal_to_rtl(
     }
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# LLM-backed skill — waveform_debug (5 detectors + LLM reasoning)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class DebugWaveformInput(BaseModel):
+    """Inputs for ``debug_waveform``."""
+
+    vcd_path:     str              = Field(..., description="Absolute path to the VCD (or FST) waveform file to analyze.")
+    signals:      list[str] | None = Field(None, description="Optional whitelist of signal names to feed the detectors. ``None`` uses every signal in the trace. Clock signals are always retained so glitch/stall detectors can establish a clock period.")
+    query:        str              = Field("",   description="Engineer's question or focus area — drives L3 query-aware pruning of the compressed event narrative and seeds the LLM reasoning prompt.")
+    model:        str              = Field("claude", description="LLM model key understood by the vibe4fpga-llm-client registry.")
+    axi_prefix:   str              = Field("",   description="AXI signal name prefix (e.g. ``m_axi_``). Empty string skips the AXI violation detector.")
+    token_budget: int              = Field(4000, ge=512, le=16000, description="Upper bound on tokens packed into the LLM context (metadata + anomaly list + event narrative).")
+
+
+@mcp.tool()
+async def debug_waveform(inputs: DebugWaveformInput) -> dict:
+    """Detect timing anomalies in a VCD waveform and explain root causes.
+
+    Runs 5 pure-Python detectors in parallel (glitches, X/Z states, CDC
+    crossings, AXI handshake violations, stall/handshake timeouts), then asks
+    the LLM for a root-cause + RTL-fix recommendation per anomaly. All
+    waveform parsing and compression happens in-process — no HTTP call out
+    to a router or sibling MCP.
+
+    Returns:
+        ``{anomaly_count, error_count, warning_count, anomalies, llm_analysis, summary}``.
+    """
+    return await waveform_debug_run(
+        waveform_path=inputs.vcd_path,
+        query=inputs.query,
+        model=inputs.model,
+        axi_prefix=inputs.axi_prefix,
+        token_budget=inputs.token_budget,
+        signals=inputs.signals,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Entry point
+# ═════════════════════════════════════════════════════════════════════════════
+
 def main() -> None:
+    """Console-script entry point for ``waveform-mcp``."""
     mcp.run()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

@@ -1,0 +1,21 @@
+# Source-of-truth manifest consumed by tools/gen-skills/generate.py.
+# DO NOT hand-edit the generated SKILL.md / command.md / host configs.
+
+mcp_name:  waveform-mcp
+binary:    waveform-mcp
+transport: stdio
+
+env:
+  required: []
+  optional:
+    - VIBE4FPGA_LLM      # default model key (claude / gpt-4o / ollama / ...)
+    - ANTHROPIC_API_KEY  # required if VIBE4FPGA_LLM=claude (default)
+    - OPENAI_API_KEY     # required if VIBE4FPGA_LLM=openai or =deepseek
+
+skills:
+  - id:               waveform_debug
+    tool:             debug_waveform
+    summary:          "Detect timing anomalies in VCD waveforms (glitches, X/Z states, CDC violations, AXI handshake, stall timeout) and explain root causes with an LLM reasoning pass."
+    claude_trigger:   "waveform|vcd|glitch|stall|debug simulation"
+    opencode_command: debug-wave
+    codex_alias:      dw

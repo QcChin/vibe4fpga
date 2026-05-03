@@ -4,20 +4,49 @@ build-backend = "hatchling.build"
 
 [project]
 name = "waveform-mcp"
-version = "0.1.0"
-description = "Simulation Waveform Parsing MCP Server (VCD/FST/WLF)"
-requires-python = ">=3.11"
+version = "0.2.0"
+description = "MCP server for VCD/FST waveform parsing + waveform_debug skill (glitch / X-Z / CDC / AXI / stall detectors + LLM reasoning)."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "vibe4fpga contributors" }]
+keywords = ["mcp", "fpga", "verilog", "vcd", "waveform", "simulation", "debug"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+]
 dependencies = [
     "mcp>=1.0.0",
     "pydantic>=2.6.0",
     "vcdvcd>=1.0.0",
+    "vibe4fpga-llm-client>=0.1.0",
+    "vibe4fpga-platform>=0.1.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "ruff>=0.4.0"]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+    "vibe4fpga-mcp-testkit",
+]
 
 [project.scripts]
 waveform-mcp = "waveform_mcp.server:main"
 
+[tool.uv.sources]
+vibe4fpga-llm-client  = { path = "../../shared/llm-client",  editable = true }
+vibe4fpga-platform    = { path = "../../shared/platform",    editable = true }
+vibe4fpga-mcp-testkit = { path = "../../shared/mcp-testkit", editable = true }
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/waveform_mcp"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

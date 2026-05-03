@@ -5,14 +5,18 @@ Token budget management (strictly within 4000 tokens total):
   Event narrative:    ~300 tokens per anomaly
   RTL code snippet:   ~400 tokens per anomaly
   Budget consumed:    min(anomaly_count × 700, 3800) + 150 metadata
+
+Post-pivot (v0.2.0): LLM calls go through ``vibe4fpga-llm-client`` via the
+shared ``_llm.py`` helper instead of the retired FastAPI router. Waveform
+data is parsed in-process using this package's own parser + compressor —
+no out-of-process ``waveform-mcp`` HTTP calls.
 """
 
 from __future__ import annotations
 
 import json
 
-import httpx
-
+from .._llm import call_llm, parse_json_response
 from .detectors import Anomaly, run_all_detectors
 
 WAVEFORM_DEBUG_SYSTEM = """\
@@ -96,93 +100,91 @@ def _build_llm_context(
     return "\n".join(context_parts), anomaly_dicts
 
 
+def _detect_clock(signal_events: dict[str, list[dict]]) -> tuple[float, list[str]]:
+    """Infer clock period and clock-signal names from compressed events.
+
+    Returns:
+        (clock_period_ns, clock_names). Default 10 ns (100 MHz) when no
+        plausible clock is visible in the trace.
+    """
+    clock_period_ns = 10.0
+    clock_names: list[str] = []
+    for name, evts in signal_events.items():
+        if "clk" not in name.lower():
+            continue
+        if not isinstance(evts, list) or len(evts) <= 10:
+            continue
+        rising = [
+            e["time"]
+            for i, e in enumerate(evts[1:], 1)
+            if evts[i - 1]["value"] in ("0", "x") and e["value"] == "1"
+        ]
+        if len(rising) >= 2:
+            clock_period_ns = (rising[-1] - rising[0]) / (len(rising) - 1)
+            clock_names.append(name)
+    return clock_period_ns, clock_names
+
+
 async def run(
     waveform_path: str,
-    query: str = "",
-    router_url: str = "http://localhost:8765",
-    model: str = "claude",
-    waveform_mcp_url: str | None = None,
-    axi_prefix: str = "",
-    token_budget: int = WAVEFORM_DEBUG_TOKEN_BUDGET,
+    query:         str = "",
+    model:         str = "claude",
+    axi_prefix:    str = "",
+    token_budget:  int = WAVEFORM_DEBUG_TOKEN_BUDGET,
+    signals:       list[str] | None = None,
 ) -> dict:
     """Run the WaveformDebug skill.
 
     Args:
-        waveform_path:    Path to .vcd or .fst file.
-        query:            Engineer's question/focus area.
-        router_url:       LLM Router URL.
-        model:            LLM backend.
-        waveform_mcp_url: waveform-mcp URL for fetching compressed data.
-        axi_prefix:       AXI signal prefix if AXI bus present.
-        token_budget:     Max tokens for LLM context.
+        waveform_path: Path to .vcd or .fst file.
+        query:         Engineer's question / focus area for L3 pruning.
+        model:         LLM model key understood by vibe4fpga-llm-client.
+        axi_prefix:    AXI signal prefix if an AXI bus is present.
+        token_budget:  Max tokens for the LLM context bundle.
+        signals:       Optional whitelist of signals to feed the detectors.
+                       ``None`` means all signals in the trace.
 
     Returns:
         {
-            "anomaly_count":    int,
-            "anomalies":        [Anomaly as dict],
-            "llm_analysis":     [{"anomaly_index", "root_cause", "fix", "severity"}],
-            "summary":          str,
+            "anomaly_count":   int,
+            "error_count":     int,
+            "warning_count":   int,
+            "anomalies":       [Anomaly as dict],
+            "llm_analysis":    [{"anomaly_index", "root_cause", "fix", "severity"}],
+            "summary":         str,
         }
     """
-    # Fetch compressed waveform data from waveform-mcp (or parse directly)
     metadata_summary = ""
     event_narrative  = ""
-    signal_events: dict = {}
+    signal_events: dict[str, list[dict]] = {}
 
-    if waveform_mcp_url:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            # Get summary
-            r1 = await client.post(
-                f"{waveform_mcp_url}/tools/summarize_for_llm",
-                json={"file_path": waveform_path, "query": query, "token_budget": token_budget},
-            )
-            if r1.status_code == 200:
-                data = r1.json()
-                metadata_summary = data.get("metadata_summary", "")
-                event_narrative  = data.get("event_narrative", "")
+    # Parse + compress in-process. No subprocess, no /tmp, no HTTP.
+    try:
+        from waveform_mcp.compressor import compress_for_llm
+        from waveform_mcp.parser import parse_waveform
 
-            # Get raw compressed events for detectors
-            r2 = await client.post(
-                f"{waveform_mcp_url}/tools/parse_waveform_tool",
-                json={"file_path": waveform_path},
-            )
-            if r2.status_code == 200:
-                meta = r2.json()
-                signal_events = {
-                    s["name"]: []  # events will be fetched per-signal as needed
-                    for s in meta.get("signals", [])
-                }
-    else:
-        # Direct parse (when not using MCP server)
-        try:
-            from waveform_mcp.compressor import compress_for_llm
-            from waveform_mcp.parser import parse_waveform
+        meta = parse_waveform(waveform_path)
+        all_signals = meta.signals
+        # Optional signal whitelist — keeps the compressor bounded on wide traces.
+        if signals:
+            filtered = {n: s for n, s in all_signals.items() if n in set(signals)}
+            # Always preserve clocks so detectors can establish a clock period.
+            for name, sig in all_signals.items():
+                if sig.is_clock:
+                    filtered.setdefault(name, sig)
+            all_signals = filtered or all_signals
 
-            meta = parse_waveform(waveform_path)
-            compressed = compress_for_llm(meta.signals, query=query, token_budget=token_budget)
-            metadata_summary = compressed["metadata_summary"]
-            event_narrative  = compressed["event_narrative"]
-            signal_events    = compressed["signal_events"]
-        except Exception as exc:
-            metadata_summary = f"Failed to parse {waveform_path}: {exc}"
+        compressed = compress_for_llm(all_signals, query=query, token_budget=token_budget)
+        metadata_summary = compressed["metadata_summary"]
+        event_narrative  = compressed["event_narrative"]
+        signal_events    = compressed["signal_events"]
+    except Exception as exc:   # noqa: BLE001 — surface as a skill-level error
+        metadata_summary = f"Failed to parse {waveform_path}: {exc}"
 
-    # Detect clock info for detectors
-    clock_period_ns = 10.0  # default 100 MHz
-    clock_names: list[str] = []
-    if signal_events:
-        try:
-            from waveform_mcp.parser import SignalTrace
-            for name, evts in signal_events.items():
-                if "clk" in name.lower() and isinstance(evts, list) and len(evts) > 10:
-                    rising = [e["time"] for i, e in enumerate(evts[1:], 1)
-                              if evts[i-1]["value"] in ("0","x") and e["value"] == "1"]
-                    if len(rising) >= 2:
-                        clock_period_ns = (rising[-1] - rising[0]) / (len(rising) - 1)
-                        clock_names.append(name)
-        except Exception:
-            pass
+    # Clock info for the glitch / handshake-timeout detectors.
+    clock_period_ns, clock_names = _detect_clock(signal_events)
 
-    # Run 5 detectors in parallel
+    # Run 5 detectors in parallel — all deterministic pure-Python logic.
     anomalies = await run_all_detectors(
         signal_events=signal_events,
         clock_period_ns=clock_period_ns,
@@ -190,34 +192,25 @@ async def run(
         axi_prefix=axi_prefix,
     )
 
-    # Build LLM context
     context, anomaly_dicts = _build_llm_context(
         metadata_summary, event_narrative, anomalies, token_budget
     )
 
     llm_analysis: list[dict] = []
     if anomalies:
-        user_prompt = f"{context}\n\nEngineer's question: {query or 'Analyze all anomalies.'}"
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{router_url}/chat",
-                json={
-                    "messages":    [{"role": "user", "content": user_prompt}],
-                    "system":      WAVEFORM_DEBUG_SYSTEM,
-                    "model":       model,
-                    "temperature": 0.2,
-                    "stream":      False,
-                },
-            )
-            if resp.status_code == 200:
-                raw = resp.json()["content"]
-                import re
-                raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
-                raw = re.sub(r"```\s*$", "", raw.strip(), flags=re.MULTILINE)
-                try:
-                    llm_analysis = json.loads(raw.strip())
-                except json.JSONDecodeError:
-                    llm_analysis = [{"raw_response": raw}]
+        user_prompt = (
+            f"{context}\n\nEngineer's question: {query or 'Analyze all anomalies.'}"
+        )
+        raw = await call_llm(
+            messages=[{"role": "user", "content": user_prompt}],
+            system=WAVEFORM_DEBUG_SYSTEM,
+            model=model,
+            temperature=0.2,
+        )
+        try:
+            llm_analysis = parse_json_response(raw)
+        except json.JSONDecodeError:
+            llm_analysis = [{"raw_response": raw}]
 
     error_count   = sum(1 for a in anomalies if a.severity == "error")
     warning_count = sum(1 for a in anomalies if a.severity == "warning")
