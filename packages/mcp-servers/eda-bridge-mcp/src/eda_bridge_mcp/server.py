@@ -24,6 +24,7 @@ from vibe4fpga_platform import (
 )
 
 from .lint import lint_files
+from .sim_log import parse_sim_log
 from .vivado import (
     build_synth_tcl,
     parse_errors,
@@ -126,8 +127,39 @@ async def run_simulation(
     Args:
         testbench:    Path to testbench file.
         source_files: RTL source files to compile alongside testbench.
-        simulator:    ``"icarus"`` | ``"verilator"`` | ``"xsim"``.
-        vcd_output:   Path to write VCD waveform (optional).
+        simulator:    ``"icarus"`` | ``"verilator"`` | ``"xsim"``
+                      (only ``"icarus"`` is wired today; the others return a
+                      structured not-implemented error).
+        vcd_output:   Path to write VCD waveform (optional; the testbench
+                      itself must still call ``$dumpfile/$dumpvars``).
+
+    Returns:
+        {
+            "success":  bool,         # exit 0 AND verdict in {pass, unclear}
+            "verdict":  str,          # "pass" | "fail" | "error" | "unclear"
+            "summary":  {             # from parse_sim_log()
+                "pass_count":        int,
+                "fail_count":        int,
+                "error_count":       int,
+                "fatal_count":       int,
+                "warning_count":     int,
+                "assertions_passed": int,
+                "assertions_failed": int,
+                "error_lines":       list[str],  # up to 10 offending lines
+            },
+            "stdout":   str,          # last 4 KB
+            "stderr":   str,          # last 1 KB
+            "vcd_path": str | None,
+        }
+
+    Verdict precedence (closes the gap flagged in the code review — a
+    testbench that prints nothing past ``$finish`` no longer silently
+    looks like a pass):
+
+        fatal   → "error"
+        fail / $error / assertion failure → "fail"
+        any PASS marker                   → "pass"
+        otherwise                         → "unclear"
     """
     if simulator != "icarus":
         return {"success": False, "error": f"Simulator '{simulator}' not yet implemented"}
@@ -178,10 +210,22 @@ async def run_simulation(
             "error":   f"vvp timed out after {exc.timeout}s",
         }
 
+    stdout_text = run_result.stdout_text()
+    stderr_text = run_result.stderr_text()
+    summary = parse_sim_log(stdout_text, stderr=stderr_text)
+
+    # ``success`` now means "simulator exited cleanly AND no failure markers
+    # were seen in the log" — a pass-by-omission (exit 0 but no PASS
+    # printed) becomes verdict="unclear" which downstream scorers can
+    # surface rather than silently green-light.
+    success = run_result.returncode == 0 and summary.verdict in ("pass", "unclear")
+
     return {
-        "success":  run_result.returncode == 0,
-        "stdout":   run_result.stdout_text()[-4000:],   # last 4K avoids huge payloads
-        "stderr":   run_result.stderr_text()[-1000:],
+        "success":  success,
+        "verdict":  summary.verdict,
+        "summary":  summary.to_dict(),
+        "stdout":   stdout_text[-4000:],   # last 4K avoids huge payloads
+        "stderr":   stderr_text[-1000:],
         "vcd_path": vcd_output,
     }
 
