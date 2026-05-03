@@ -4,23 +4,57 @@ build-backend = "hatchling.build"
 
 [project]
 name = "datasheet-mcp"
-version = "0.1.0"
-description = "RAG Knowledge Base MCP Server (datasheets, protocols, IP interfaces)"
-requires-python = ">=3.11"
+version = "0.2.0"
+description = "RAG knowledge-base MCP server over FPGA datasheets, protocol specs, and IP-core interface documents."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "vibe4fpga contributors" }]
+keywords = ["mcp", "fpga", "rag", "datasheet", "qdrant", "llama-index"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+]
 dependencies = [
     "mcp>=1.0.0",
     "pydantic>=2.6.0",
     "llama-index-core>=0.10.0",
-    "qdrant-client>=1.9.0",
     "llama-index-vector-stores-qdrant>=0.2.0",
+    "qdrant-client>=1.9.0",
     "openai>=1.20.0",
+    "vibe4fpga-platform>=0.1.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "ruff>=0.4.0"]
+# Offline embedding fallback. Pulls sentence-transformers + torch (~300 MB).
+# Enable only when you genuinely need to index without an OpenAI key.
+offline = [
+    "llama-index-embeddings-huggingface>=0.2.0",
+    "sentence-transformers>=2.7.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pyyaml>=6.0",
+    "ruff>=0.4.0",
+    "vibe4fpga-mcp-testkit",
+]
 
 [project.scripts]
 datasheet-mcp = "datasheet_mcp.server:main"
 
+[tool.uv.sources]
+vibe4fpga-platform    = { path = "../../shared/platform",    editable = true }
+vibe4fpga-mcp-testkit = { path = "../../shared/mcp-testkit", editable = true }
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/datasheet_mcp"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

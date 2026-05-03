@@ -1,0 +1,19 @@
+# Source-of-truth manifest consumed by tools/gen-skills/generate.py.
+# DO NOT hand-edit the generated SKILL.md / command.md / host configs.
+
+mcp_name:  datasheet-mcp
+binary:    datasheet-mcp
+transport: stdio
+
+env:
+  required:
+    - OPENAI_API_KEY           # used by the embeddings path (text-embedding-3-small)
+  optional:
+    - VIBE4FPGA_DATASHEET_DB_PATH  # override the default ~/.vibe4fpga/datasheet_qdrant store
+
+# No LLM-chat skills — this MCP is pure embeddings + retrieval over a Qdrant
+# vector store. Its tools (search_datasheet, search_protocol,
+# search_design_pattern, get_ip_interface, index_document_tool, search_all)
+# are registered statically in server.py and require no host-facing skill
+# manifest entries.
+skills: []

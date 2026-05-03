@@ -2,8 +2,21 @@
 
 Supports: PDF, plain text, Markdown.
 Incremental update: tracks file SHA-256 hash, only rebuilds changed documents.
-Embedding: OpenAI text-embedding-3-small (primary) or HuggingFace (offline fallback).
-Storage: Qdrant local persistent mode (./qdrant_storage).
+Embedding: OpenAI ``text-embedding-3-small`` (primary) or HuggingFace
+(offline fallback, installed via the ``[offline]`` extra).
+Storage: Qdrant local persistent mode.
+
+Storage location is resolved once at import time to a cross-platform absolute
+path. Precedence:
+
+    1. ``VIBE4FPGA_DATASHEET_DB_PATH`` env var override (any absolute or
+       user-expanded path).
+    2. ``~/.vibe4fpga/datasheet_qdrant`` (default, works on macOS / Linux /
+       Windows without cwd ambiguity).
+
+The legacy ``./qdrant_storage`` relative path has been removed because it
+resolved unpredictably depending on the directory the MCP host happened to
+launch the server from.
 """
 
 from __future__ import annotations
@@ -13,8 +26,22 @@ import json
 import os
 from pathlib import Path
 
-HASH_CACHE_PATH = Path("./qdrant_storage/file_hashes.json")
-QDRANT_PATH     = "./qdrant_storage"
+
+def _resolve_qdrant_root() -> Path:
+    """Return the absolute directory used for Qdrant persistence + hash cache."""
+    override = os.getenv("VIBE4FPGA_DATASHEET_DB_PATH", "").strip()
+    if override:
+        root = Path(override).expanduser().resolve()
+    else:
+        root = (Path.home() / ".vibe4fpga" / "datasheet_qdrant").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+QDRANT_ROOT     = _resolve_qdrant_root()
+QDRANT_PATH     = str(QDRANT_ROOT)
+HASH_CACHE_PATH = QDRANT_ROOT / "file_hashes.json"
+INDEX_PERSIST_DIR = str(QDRANT_ROOT / "index")
 COLLECTION_NAME = "fpga_knowledge"
 
 
@@ -38,21 +65,27 @@ def _save_hash_cache(cache: dict[str, str]) -> None:
 
 
 def _get_embed_model():
-    """Return embedding model: OpenAI if API key present, HuggingFace otherwise."""
+    """Return embedding model: OpenAI if API key present, HuggingFace otherwise.
+
+    OpenAI is kept as a direct ``openai`` SDK dependency because
+    ``vibe4fpga-llm-client`` currently only models chat completions, not
+    embeddings. If that library ever grows an embeddings surface, this is the
+    one place to swap.
+    """
     api_key = os.getenv("OPENAI_API_KEY", "")
     if api_key:
         from llama_index.embeddings.openai import OpenAIEmbedding
         return OpenAIEmbedding(model="text-embedding-3-small", api_key=api_key)
 
-    # Offline fallback — requires sentence-transformers
+    # Offline fallback — requires the ``[offline]`` extra
     try:
         from llama_index.embeddings.huggingface import HuggingFaceEmbedding
         return HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    except ImportError:
+    except ImportError as exc:
         raise RuntimeError(
-            "No embedding model available. Set OPENAI_API_KEY or install "
-            "llama-index-embeddings-huggingface + sentence-transformers."
-        )
+            "No embedding model available. Set OPENAI_API_KEY or install the "
+            "offline extra: `uv tool install 'datasheet-mcp[offline]'`."
+        ) from exc
 
 
 def _get_index(embed_model=None):
@@ -76,7 +109,7 @@ def _get_index(embed_model=None):
         from llama_index.core import StorageContext, load_index_from_storage
         storage_context = StorageContext.from_defaults(
             vector_store=vector_store,
-            persist_dir=f"{QDRANT_PATH}/index",
+            persist_dir=INDEX_PERSIST_DIR,
         )
         return load_index_from_storage(storage_context), vector_store, client
     except Exception:
@@ -123,7 +156,7 @@ def index_document(file_path: str, doc_type: str = "datasheet") -> dict:
         for doc in docs:
             index.insert(doc)
 
-        index.storage_context.persist(persist_dir=f"{QDRANT_PATH}/index")
+        index.storage_context.persist(persist_dir=INDEX_PERSIST_DIR)
 
         cache[file_path] = current_hash
         _save_hash_cache(cache)
