@@ -4,16 +4,47 @@ build-backend = "hatchling.build"
 
 [project]
 name = "yosys-mcp"
-version = "0.1.0"
-description = "Yosys/nextpnr open-source FPGA toolchain MCP server"
-requires-python = ">=3.11"
+version = "0.2.0"
+description = "MCP server bridging the Yosys / nextpnr / Icestorm open-source FPGA toolchain (ice40, ecp5, formal-prep)."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "vibe4fpga contributors" }]
+keywords = ["mcp", "fpga", "yosys", "nextpnr", "ice40", "ecp5", "icestorm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+]
 dependencies = [
     "mcp>=1.0.0",
-    "pydantic>=2.0",
+    "pydantic>=2.6.0",
+    "vibe4fpga-platform>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pyyaml>=6.0",
+    "ruff>=0.4.0",
+    "vibe4fpga-mcp-testkit",
 ]
 
 [project.scripts]
 yosys-mcp = "yosys_mcp.server:main"
 
+[tool.uv.sources]
+vibe4fpga-platform    = { path = "../../shared/platform",    editable = true }
+vibe4fpga-mcp-testkit = { path = "../../shared/mcp-testkit", editable = true }
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/yosys_mcp"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

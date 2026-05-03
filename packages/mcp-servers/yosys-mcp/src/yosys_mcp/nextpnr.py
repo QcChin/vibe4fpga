@@ -1,18 +1,21 @@
 """nextpnr Place & Route wrapper.
 
-Supports iCE40 and ECP5 targets. Parses utilization and timing from
-nextpnr JSON output.
-
-Design doc reference: Phase 4 — Yosys/nextpnr开源工具链支持
+Supports iCE40 and ECP5 targets and generates iCE40 bitstreams via
+``icepack``. All subprocess invocations flow through
+``vibe4fpga_platform.run`` for cross-platform behaviour and safe timeouts.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import re
-import tempfile
 from pathlib import Path
+
+from vibe4fpga_platform import (
+    Completed,
+    ProcessTimeoutError,
+    find_tool,
+    run,
+)
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
@@ -61,20 +64,24 @@ def _parse_nextpnr_output(stdout: str, stderr: str) -> dict:
 
 # ── nextpnr runner ────────────────────────────────────────────────────────────
 
-async def _run_nextpnr(cmd: list[str], work_dir: str, timeout: int) -> tuple[str, str, int]:
+async def _run_nextpnr(
+    cmd: list,
+    work_dir: Path,
+    timeout: int,
+    binary_label: str,
+) -> tuple[str, str, int]:
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=work_dir,
-        )
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return stdout_b.decode(), stderr_b.decode(), proc.returncode or 0
-    except asyncio.TimeoutError:
-        return "", f"nextpnr timed out after {timeout}s", -1
+        completed: Completed = await run(cmd, cwd=work_dir, timeout=timeout)
+    except ProcessTimeoutError:
+        return "", f"{binary_label} timed out after {timeout}s", -1
     except FileNotFoundError as exc:
-        return "", f"nextpnr not found: {exc}. Install: sudo apt install nextpnr-ice40 nextpnr-ecp5", -1
+        return (
+            "",
+            f"{binary_label} not found: {exc}. Install nextpnr via "
+            "`brew install nextpnr` (macOS) or oss-cad-suite (Windows).",
+            -1,
+        )
+    return completed.stdout_text(), completed.stderr_text(), completed.returncode
 
 
 async def place_and_route_ice40(
@@ -101,16 +108,27 @@ async def place_and_route_ice40(
     Returns:
         {success, fmax_mhz, utilization, output_asc, errors, warnings}
     """
-    work_dir = str(Path(netlist_json).parent)
-    top = Path(netlist_json).stem.replace("_synth", "")
-    asc = output_asc or str(Path(work_dir) / f"{top}.asc")
+    nextpnr_bin = find_tool("nextpnr-ice40", env_var="NEXTPNR_ICE40_PATH")
+    if nextpnr_bin is None:
+        return {
+            "success": False,
+            "errors": [
+                "nextpnr-ice40 not found. Install via "
+                "`brew install nextpnr` (macOS) or oss-cad-suite (Windows)."
+            ],
+            "returncode": -1,
+        }
 
-    cmd = [
-        "nextpnr-ice40",
+    work_dir = Path(netlist_json).parent
+    top = Path(netlist_json).stem.replace("_synth", "")
+    asc_path = Path(output_asc) if output_asc else work_dir / f"{top}.asc"
+
+    cmd: list = [
+        nextpnr_bin,
         f"--{device}",
         "--package", package,
         "--json", netlist_json,
-        "--asc", asc,
+        "--asc", str(asc_path),
         "--seed", str(seed),
     ]
     if pcf_file:
@@ -118,10 +136,10 @@ async def place_and_route_ice40(
     if freq_constraint_mhz:
         cmd += ["--freq", str(freq_constraint_mhz)]
 
-    stdout, stderr, rc = await _run_nextpnr(cmd, work_dir, timeout)
+    stdout, stderr, rc = await _run_nextpnr(cmd, work_dir, timeout, "nextpnr-ice40")
     result = _parse_nextpnr_output(stdout, stderr)
     result["returncode"] = rc
-    result["output_asc"] = asc if Path(asc).exists() else None
+    result["output_asc"] = str(asc_path) if asc_path.exists() else None
     result["log_excerpt"] = (stdout + stderr)[-2000:]
     return result
 
@@ -148,16 +166,27 @@ async def place_and_route_ecp5(
     Returns:
         {success, fmax_mhz, utilization, output_config, errors, warnings}
     """
-    work_dir = str(Path(netlist_json).parent)
-    top = Path(netlist_json).stem.replace("_synth", "")
-    config = output_config or str(Path(work_dir) / f"{top}.config")
+    nextpnr_bin = find_tool("nextpnr-ecp5", env_var="NEXTPNR_ECP5_PATH")
+    if nextpnr_bin is None:
+        return {
+            "success": False,
+            "errors": [
+                "nextpnr-ecp5 not found. Install via "
+                "`brew install nextpnr` (macOS) or oss-cad-suite (Windows)."
+            ],
+            "returncode": -1,
+        }
 
-    cmd = [
-        "nextpnr-ecp5",
-        "--{device}".format(device=device),
+    work_dir = Path(netlist_json).parent
+    top = Path(netlist_json).stem.replace("_synth", "")
+    cfg_path = Path(output_config) if output_config else work_dir / f"{top}.config"
+
+    cmd: list = [
+        nextpnr_bin,
+        f"--{device}",
         "--package", package,
         "--json", netlist_json,
-        "--textcfg", config,
+        "--textcfg", str(cfg_path),
         "--seed", str(seed),
     ]
     if lpf_file:
@@ -165,10 +194,10 @@ async def place_and_route_ecp5(
     if freq_constraint_mhz:
         cmd += ["--freq", str(freq_constraint_mhz)]
 
-    stdout, stderr, rc = await _run_nextpnr(cmd, work_dir, timeout)
+    stdout, stderr, rc = await _run_nextpnr(cmd, work_dir, timeout, "nextpnr-ecp5")
     result = _parse_nextpnr_output(stdout, stderr)
     result["returncode"] = rc
-    result["output_config"] = config if Path(config).exists() else None
+    result["output_config"] = str(cfg_path) if cfg_path.exists() else None
     result["log_excerpt"] = (stdout + stderr)[-2000:]
     return result
 
@@ -183,27 +212,35 @@ async def generate_bitstream_ice40(asc_file: str, output_bin: str | None = None)
     Returns:
         {success, output_bin}
     """
-    work_dir = str(Path(asc_file).parent)
-    bin_file = output_bin or asc_file.replace(".asc", ".bin")
+    icepack_bin = find_tool("icepack", env_var="ICEPACK_PATH")
+    if icepack_bin is None:
+        return {
+            "success": False,
+            "error": (
+                "icepack not found. Install icestorm tools via "
+                "`brew install icestorm` (macOS) or oss-cad-suite (Windows)."
+            ),
+        }
+
+    work_dir = Path(asc_file).parent
+    bin_file = Path(output_bin) if output_bin else Path(asc_file).with_suffix(".bin")
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "icepack", asc_file, bin_file,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        completed = await run(
+            [icepack_bin, asc_file, str(bin_file)],
             cwd=work_dir,
+            timeout=30,
         )
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=30)
-        stdout, stderr = stdout_b.decode(), stderr_b.decode()
-        rc = proc.returncode or 0
-    except FileNotFoundError:
-        return {"success": False, "error": "icepack not found. Install icestorm tools."}
-    except asyncio.TimeoutError:
+    except ProcessTimeoutError:
         return {"success": False, "error": "icepack timed out"}
+
+    stdout = completed.stdout_text()
+    stderr = completed.stderr_text()
+    rc = completed.returncode
 
     return {
         "success": rc == 0,
-        "output_bin": bin_file if Path(bin_file).exists() else None,
+        "output_bin": str(bin_file) if bin_file.exists() else None,
         "returncode": rc,
         "output": (stdout + stderr)[-500:],
     }

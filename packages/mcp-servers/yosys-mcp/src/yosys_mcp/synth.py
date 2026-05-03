@@ -4,17 +4,24 @@ Supports:
   - Generic synthesis (synth)
   - iCE40 target (synth_ice40 → iCE40LP/HX/UP)
   - ECP5 target   (synth_ecp5 → Lattice ECP5)
-  - Generic ASIC  (synth → techmap with liberty file)
+  - Formal preparation (prep → write_smt2)
 
-Design doc reference: Phase 4 — Yosys/nextpnr开源工具链支持
+All subprocess invocations and scratch paths flow through
+``vibe4fpga_platform`` so the MCP behaves identically on macOS and Windows.
 """
 
 from __future__ import annotations
 
-import asyncio
 import re
-import tempfile
 from pathlib import Path
+
+from vibe4fpga_platform import (
+    ProcessTimeoutError,
+    ToolNotFoundError,
+    find_tool,
+    run,
+    scratch_dir,
+)
 
 
 # ── Script templates ──────────────────────────────────────────────────────────
@@ -93,29 +100,34 @@ def _parse_yosys_output(stdout: str, stderr: str) -> dict:
 
 # ── Yosys runner ──────────────────────────────────────────────────────────────
 
-async def _run_yosys(script: str, work_dir: str, timeout: int = 120) -> tuple[str, str, int]:
+async def _run_yosys(script: str, work_dir: Path, timeout: int = 120) -> tuple[str, str, int]:
     """Execute yosys with an inline script. Returns (stdout, stderr, returncode)."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".ys", delete=False, dir=work_dir
-    ) as f:
-        f.write(script)
-        script_path = f.name
+    yosys_bin = find_tool("yosys", env_var="YOSYS_PATH")
+    if yosys_bin is None:
+        return (
+            "",
+            "yosys not found. Install via `brew install yosys` (macOS) or "
+            "scoop install yosys / oss-cad-suite (Windows).",
+            -1,
+        )
+
+    script_path = work_dir / "yosys_script.ys"
+    script_path.write_text(script, encoding="utf-8")
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "yosys", "-s", script_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        completed = await run(
+            [yosys_bin, "-s", script_path],
             cwd=work_dir,
+            timeout=timeout,
         )
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return stdout_b.decode(), stderr_b.decode(), proc.returncode or 0
-    except asyncio.TimeoutError:
+    except ProcessTimeoutError:
         return "", f"Yosys timed out after {timeout}s", -1
-    except FileNotFoundError:
-        return "", "yosys not found. Install: sudo apt install yosys", -1
+    except ToolNotFoundError as exc:
+        return "", str(exc), -1
     finally:
-        Path(script_path).unlink(missing_ok=True)
+        script_path.unlink(missing_ok=True)
+
+    return completed.stdout_text(), completed.stderr_text(), completed.returncode
 
 
 async def synthesize(
@@ -133,7 +145,7 @@ async def synthesize(
         source_files: List of Verilog/SystemVerilog source paths.
         top_module:   Top-level module name.
         target:       Synthesis target: "ice40" | "ecp5" | "generic".
-        work_dir:     Working directory for output files (temp dir if None).
+        work_dir:     Working directory for output files (scratch dir if None).
         sv_mode:      Pass -sv flag to read_verilog for SystemVerilog.
         extra_flags:  Additional flags for synth_* command.
         timeout:      Synthesis timeout in seconds.
@@ -141,10 +153,9 @@ async def synthesize(
     Returns:
         {success, errors, warnings, cells, output_json}
     """
-    import tempfile as _tempfile
-
-    wd = work_dir or _tempfile.mkdtemp()
-    output_json = str(Path(wd) / f"{top_module}_synth.json")
+    wd: Path = Path(work_dir) if work_dir else scratch_dir("yosys_synth_")
+    wd.mkdir(parents=True, exist_ok=True)
+    output_json = wd / f"{top_module}_synth.json"
     read_flags = "-sv" if sv_mode else ""
     sources = " ".join(f'"{f}"' for f in source_files)
 
@@ -153,14 +164,14 @@ async def synthesize(
         read_flags=read_flags,
         source_files=sources,
         top_module=top_module,
-        output_json=output_json,
+        output_json=str(output_json),
         extra_flags=extra_flags,
     )
 
     stdout, stderr, rc = await _run_yosys(script, wd, timeout)
     result = _parse_yosys_output(stdout, stderr)
     result["returncode"] = rc
-    result["output_json"] = output_json if Path(output_json).exists() else None
+    result["output_json"] = str(output_json) if output_json.exists() else None
     result["log_excerpt"] = (stdout + stderr)[-2000:]
     return result
 
@@ -176,20 +187,19 @@ async def prepare_formal(
     Returns:
         {success, errors, output_smt2}
     """
-    import tempfile as _tempfile
-
-    wd = work_dir or _tempfile.mkdtemp()
-    output_smt2 = str(Path(wd) / f"{top_module}.smt2")
+    wd: Path = Path(work_dir) if work_dir else scratch_dir("yosys_formal_")
+    wd.mkdir(parents=True, exist_ok=True)
+    output_smt2 = wd / f"{top_module}.smt2"
     sources = " ".join(f'"{f}"' for f in source_files)
 
     script = _FORMAL_PREP.format(
         source_files=sources,
         top_module=top_module,
-        output_smt2=output_smt2,
+        output_smt2=str(output_smt2),
     )
 
     stdout, stderr, rc = await _run_yosys(script, wd, timeout)
     result = _parse_yosys_output(stdout, stderr)
     result["returncode"] = rc
-    result["output_smt2"] = output_smt2 if Path(output_smt2).exists() else None
+    result["output_smt2"] = str(output_smt2) if output_smt2.exists() else None
     return result

@@ -1,0 +1,16 @@
+# Source-of-truth manifest consumed by tools/gen-skills/generate.py.
+# DO NOT hand-edit the generated SKILL.md / command.md / host configs.
+
+mcp_name:  yosys-mcp
+binary:    yosys-mcp
+transport: stdio
+
+env:
+  required: []
+  optional:
+    - YOSYS_PATH
+    - NEXTPNR_ICE40_PATH
+    - NEXTPNR_ECP5_PATH
+    - ICEPACK_PATH
+
+skills: []
