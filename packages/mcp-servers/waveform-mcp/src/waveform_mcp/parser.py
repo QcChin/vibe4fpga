@@ -2,16 +2,19 @@
 
 Uses vcdvcd for VCD parsing. FST is handled via GTKWave's fst2vcd conversion
 when available, falling back to a "not supported" message.
+
+``parse_fst`` and ``parse_waveform`` are ``async`` because fst2vcd can take
+several seconds on large captures and we refuse to block the MCP event loop.
+VCD parsing stays synchronous — it's a pure-Python fast path via vcdvcd.
 """
 
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from vibe4fpga_platform import find_tool, run, scratch_file
 
 # ── Timescale utilities ───────────────────────────────────────────────────────
 
@@ -163,32 +166,50 @@ def parse_vcd(file_path: str) -> WaveformMetadata:
     )
 
 
-def parse_fst(file_path: str) -> WaveformMetadata:
-    """Parse an FST file by converting to VCD via GTKWave's fst2vcd tool."""
-    if not shutil.which("fst2vcd"):
-        raise RuntimeError(
-            "fst2vcd not found. Install GTKWave (brew install gtkwave) to enable FST parsing."
-        )
-    with tempfile.NamedTemporaryFile(suffix=".vcd", delete=False) as tmp:
-        tmp_path = tmp.name
+async def parse_fst(file_path: str) -> WaveformMetadata:
+    """Parse an FST file by converting to VCD via GTKWave's fst2vcd tool.
 
-    subprocess.run(
-        ["fst2vcd", "-o", tmp_path, file_path],
-        check=True,
-        capture_output=True,
+    Async because fst2vcd can spend several seconds on large captures; we
+    run it through :func:`vibe4fpga_platform.run` so it doesn't block the
+    MCP event loop and so Windows `.exe` / UTF-8 / long-path handling is
+    consistent with the rest of the fleet.
+    """
+    fst2vcd = find_tool("fst2vcd", env_var="FST2VCD_PATH")
+    if fst2vcd is None:
+        raise RuntimeError(
+            "fst2vcd not found. Install GTKWave "
+            "(macOS: `brew install gtkwave`, "
+            "Windows: https://gtkwave.sourceforge.net/, "
+            "Linux: `apt install gtkwave`) "
+            "or point FST2VCD_PATH at the binary."
+        )
+
+    tmp = scratch_file(".vcd")
+    result = await run(
+        [fst2vcd, "-o", str(tmp), file_path],
+        timeout=120,  # large FSTs can take a while; anything longer is a bad file
     )
-    meta = parse_vcd(tmp_path)
+    if not result.ok:
+        raise RuntimeError(
+            f"fst2vcd exited {result.returncode}: {result.stderr_text()[:400]}"
+        )
+
+    meta = parse_vcd(str(tmp))
     meta.format = "fst"
     meta.file_path = file_path
-    Path(tmp_path).unlink(missing_ok=True)
+    # scratch_file's parent is auto-cleaned at process exit; no unlink needed.
     return meta
 
 
-def parse_waveform(file_path: str) -> WaveformMetadata:
-    """Auto-detect format and parse waveform file."""
+async def parse_waveform(file_path: str) -> WaveformMetadata:
+    """Auto-detect format and parse waveform file.
+
+    Async to uniformly await — VCD parsing is sync internally but wrapped so
+    every caller writes ``await parse_waveform(...)`` regardless of format.
+    """
     suffix = Path(file_path).suffix.lower()
     if suffix == ".vcd":
-        return parse_vcd(file_path)
+        return parse_vcd(file_path)  # pure-Python vcdvcd, fast
     if suffix == ".fst":
-        return parse_fst(file_path)
+        return await parse_fst(file_path)
     raise ValueError(f"Unsupported waveform format: {suffix}. Supported: .vcd, .fst")

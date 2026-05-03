@@ -73,15 +73,22 @@ def long_path(p: Path | str) -> Path:
     No-op on non-Windows platforms and for already-prefixed paths.
     Applied when the absolute path length would otherwise exceed the 240-char
     soft limit (260 hard limit minus headroom for filename expansion).
+
+    Uses :func:`os.path.abspath` rather than :meth:`Path.resolve` so the
+    function works on paths that don't exist yet (a common case for
+    subprocess output files whose path we need to stringify before the
+    child process creates them). ``resolve()`` raises on missing targets on
+    older Windows Pythons and performs symlink resolution we don't want.
     """
-    p = Path(p)
+    p_str = os.fspath(p)
+    # Already prefixed — pass through unchanged regardless of OS.
+    if p_str.startswith("\\\\?\\"):
+        return Path(p_str)
     if not IS_WINDOWS:
-        return p
-    absolute = str(p.resolve())
-    if absolute.startswith("\\\\?\\"):
-        return p
+        return Path(p_str)
+    absolute = os.path.abspath(p_str)   # filesystem-free; works on non-existent paths
     if len(absolute) <= 240:
-        return p
+        return Path(absolute)
     return Path("\\\\?\\" + absolute)
 
 

@@ -29,15 +29,19 @@ _cache: dict[str, object] = {}
 _cache_order: list[str] = []   # LRU eviction order
 
 
-def _load(file_path: str):
-    """Load and cache a waveform file with LRU eviction."""
+async def _load(file_path: str):
+    """Load and cache a waveform file with LRU eviction.
+
+    Async because :func:`parser.parse_waveform` is async (FST → fst2vcd goes
+    through a subprocess that must not block the MCP event loop).
+    """
     if file_path in _cache:
         # Move to front (most recently used)
         _cache_order.remove(file_path)
         _cache_order.append(file_path)
         return _cache[file_path]
 
-    meta = parse_waveform(file_path)
+    meta = await parse_waveform(file_path)
     _cache[file_path] = meta
     _cache_order.append(file_path)
 
@@ -60,7 +64,7 @@ async def parse_waveform_tool(file_path: str) -> dict:
         {format, duration_ns, signal_count, clocks, signals}
     """
     try:
-        meta = _load(file_path)
+        meta = await _load(file_path)
         return meta.to_summary()
     except FileNotFoundError:
         return {"error": f"File not found: {file_path}"}
@@ -87,7 +91,7 @@ async def extract_signal_events(
         {signal_name: [{time: float, value: str}]}
     """
     try:
-        meta = _load(file_path)
+        meta = await _load(file_path)
     except Exception as exc:
         return {"error": f"Failed to load waveform: {exc}"}  # type: ignore[return-value]
 
@@ -129,7 +133,7 @@ async def decode_axi_tool(
         {transactions, violations, summary}
     """
     try:
-        meta = _load(file_path)
+        meta = await _load(file_path)
     except Exception as exc:
         return {"error": f"Failed to load waveform: {exc}"}
 
@@ -173,7 +177,7 @@ async def summarize_for_llm(
         {metadata_summary, clock_summaries, event_narrative, anomaly_count}
     """
     try:
-        meta = _load(file_path)
+        meta = await _load(file_path)
     except Exception as exc:
         return {"error": f"Failed to load waveform: {exc}"}
 

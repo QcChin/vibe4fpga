@@ -163,7 +163,7 @@ async def run(
         from waveform_mcp.compressor import compress_for_llm
         from waveform_mcp.parser import parse_waveform
 
-        meta = parse_waveform(waveform_path)
+        meta = await parse_waveform(waveform_path)
         all_signals = meta.signals
         # Optional signal whitelist — keeps the compressor bounded on wide traces.
         if signals:
