@@ -1,20 +1,25 @@
 """verify-mcp — FastMCP server entrypoint.
 
-Phase A status (this file):
-    Skeleton only. The skill modules under :mod:`verify_mcp.skills` were
-    copied verbatim from the retired ``packages/skills/`` package and still
-    call the old FastAPI llm-router over HTTP. Phase B rewires them to
-    :func:`vibe4fpga_llm_client.adapter_from_env` and fleshes out the tool
-    bodies below.
+Exposes two LLM-backed tools absorbed from the retired ``packages/skills/``
+monolith:
 
-The tool signatures here are the contract Phase B must preserve — they are
-also the schema source for ``skill.yaml`` and the gen-skills generator.
+* ``generate_testbench`` — synthesise a self-checking SystemVerilog testbench
+  (``verify_mcp.skills.testbench_gen``).
+* ``score_verification`` — ingest lint/sim/formal/synth reports and produce a
+  composite score + narrative report
+  (``verify_mcp.skills.verification``).
+
+LLM calls flow through the shared :mod:`vibe4fpga_llm_client` adapter library,
+so the backend is selected at runtime via ``VIBE4FPGA_LLM`` / API-key env vars.
 """
 
 from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
+
+from .skills.testbench_gen.skill import run as testbench_gen_run
+from .skills.verification.pipeline import run as verification_run
 
 mcp = FastMCP("verify-mcp")
 
@@ -45,34 +50,51 @@ class ScoreVerificationInput(BaseModel):
 
 # ── Tools ────────────────────────────────────────────────────────────────────
 
-_PHASE_B_SENTINEL = (
-    "verify-mcp tools are stubbed in Phase A. Phase B rewires the copied "
-    "skill logic to use vibe4fpga_llm_client.adapter_from_env() directly. "
-    "Track progress in /Users/naspter/.claude/plans/cheeky-kindling-bachman.md."
-)
-
-
 @mcp.tool()
 async def generate_testbench(inputs: GenerateTestbenchInput) -> dict:
     """Generate a SystemVerilog testbench for the supplied RTL module.
 
-    Phase A: stubbed. Phase B wires this to
-    :mod:`verify_mcp.skills.testbench_gen` and the shared LLM client.
+    Produces a self-checking testbench with reset handling, boundary-condition
+    stimulus, SVA assertions (both simulation and ``ifdef FORMAL`` paths),
+    a covergroup tracking coverage points, and a watchdog timeout. Coverage
+    goals passed through ``inputs.coverage`` are woven into the prompt.
+
+    Returns:
+        ``{testbench_code, coverage_points, assertion_count, simulator,
+           warnings, summary}``.
     """
-    raise NotImplementedError(_PHASE_B_SENTINEL)
+    return await testbench_gen_run(
+        rtl_code  = inputs.rtl_code,
+        spec      = inputs.spec,
+        coverage  = inputs.coverage,
+        simulator = inputs.simulator,
+        model     = inputs.model,
+    )
 
 
 @mcp.tool()
 async def score_verification(inputs: ScoreVerificationInput) -> dict:
     """Multi-stage verification scoring across lint, sim, formal, synth, and spec.
 
-    Returns a verdict per stage plus an overall_verdict (PASS/WARN/FAIL) and
-    a Markdown narrative report.
+    Each optional report is parsed deterministically (error/warning counts,
+    simulator pass/fail markers, formal failures, WNS extraction). When a
+    ``spec`` is provided, a further LLM self-check extracts spec clauses and
+    verifies them against ``rtl_code``. The stage outputs feed
+    :func:`skills.verification.scorer.compute_score`, and an LLM narrative
+    renders the Markdown report.
 
-    Phase A: stubbed. Phase B wires this to
-    :mod:`verify_mcp.skills.verification` and the shared LLM client.
+    Returns a verdict per stage plus an ``overall_verdict`` (PASS/REVIEW/FAIL)
+    and a Markdown narrative under ``report_md``.
     """
-    raise NotImplementedError(_PHASE_B_SENTINEL)
+    return await verification_run(
+        rtl_code      = inputs.rtl_code,
+        spec          = inputs.spec,
+        sim_log       = inputs.sim_log,
+        lint_report   = inputs.lint_report,
+        formal_report = inputs.formal_report,
+        synth_report  = inputs.synth_report,
+        model         = inputs.model,
+    )
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────

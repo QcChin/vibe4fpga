@@ -3,9 +3,9 @@
 Generated testbench includes:
   - Basic write-read and boundary condition scenarios
   - Reset test (state integrity after reset)
-  - SVA assertions for all interface signals (≥1 per signal)
+  - SVA assertions for all interface signals (>=1 per signal)
   - Protocol interface assertion groups (AXI handshake, FIFO full/empty, etc.)
-  - Covergroup with coverage target ≥ 80%
+  - Covergroup with coverage target >= 80%
   - Simulation timeout watchdog
 """
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-import httpx
+from .._llm import call_llm
 
 TESTBENCH_SYSTEM = """\
 You are an expert FPGA verification engineer generating a SystemVerilog testbench.
@@ -22,16 +22,16 @@ The testbench must:
 1. Be a self-contained file (includes DUT instantiation, clock/reset generation)
 2. Use `timescale 1ns/1ps
 3. Generate clock with proper period (default 10ns = 100MHz unless specified)
-4. Apply reset for ≥ 5 cycles before starting stimulus
+4. Apply reset for >= 5 cycles before starting stimulus
 5. Include these test scenarios:
-   a. Basic functional test (write/enable → check output)
+   a. Basic functional test (write/enable -> check output)
    b. Boundary conditions (max/min values, simultaneous operations)
    c. Reset test (assert reset mid-operation, verify clean state)
    d. Back-to-back transactions (no gaps, stress test)
 6. SVA assertions (at least 1 per interface output signal):
    - Place in `ifdef FORMAL blocks AND always blocks (simulation checks)
    - Protocol assertions for handshake signals
-7. Covergroup for all input/output combinations (coverage target ≥ 80%):
+7. Covergroup for all input/output combinations (coverage target >= 80%):
    - Coverpoint for each multi-bit port (bins for 0, max, random)
    - Cross coverage between related signals
 8. Simulation timeout: $finish after 10x expected run time
@@ -41,68 +41,69 @@ Output ONLY the complete SystemVerilog testbench code. No explanation.
 """
 
 TESTBENCH_PROMPT = """\
-Generate a complete testbench for this module:
+Generate a complete testbench for this module.
 
-Design Intent:
-{design_intent_json}
+Target simulator: {simulator}
+
+Coverage goals:
+{coverage_goals}
+
+Specification:
+{spec}
 
 RTL Code:
 ```systemverilog
 {rtl_code}
 ```
-
-Specification:
-{spec}
 """
 
 
 async def run(
-    rtl_code: str,
-    spec: str = "",
-    design_intent: dict | None = None,
-    router_url: str = "http://localhost:8765",
-    model: str = "claude",
+    rtl_code:  str,
+    spec:      str | None        = None,
+    coverage:  list[str] | None  = None,
+    simulator: str               = "iverilog",
+    model:     str | None        = None,
 ) -> dict:
     """Generate a coverage-driven testbench.
 
     Args:
-        rtl_code:       The synthesizable RTL code to test.
-        spec:           Original natural language spec.
-        design_intent:  DesignIntent JSON from Spec2RTL (optional but improves quality).
+        rtl_code:  The synthesizable RTL code to test.
+        spec:      Natural-language description of intended behaviour.
+        coverage:  Named coverage goals (e.g. 'reset_recovery', 'backpressure').
+        simulator: Target simulator ('iverilog' | 'verilator' | 'xsim').
+        model:     LLM model key (see vibe4fpga-llm-client registry). Defaults
+                   to the registry's VIBE4FPGA_LLM fallback when ``None``.
 
     Returns:
         {
-            "testbench_code": str,
-            "coverage_points": int,   # estimated number of coverpoints
-            "assertion_count": int,   # number of SVA assertions found
-            "warnings":        list,
+            "testbench_code":  str,
+            "coverage_points": int,  # estimated number of coverpoints
+            "assertion_count": int,  # number of SVA assertions found
+            "simulator":       str,
+            "warnings":        list[str],
+            "summary":         str,
         }
     """
-    import json
+    coverage_goals = (
+        "\n".join(f"  - {g}" for g in coverage) if coverage else "  - No explicit coverage goals supplied."
+    )
 
-    intent_str = json.dumps(design_intent, indent=2) if design_intent else "Not provided"
-
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        resp = await client.post(
-            f"{router_url}/chat",
-            json={
-                "messages": [{
-                    "role": "user",
-                    "content": TESTBENCH_PROMPT.format(
-                        design_intent_json=intent_str,
-                        rtl_code=rtl_code[:6000],
-                        spec=spec or "No spec provided.",
-                    ),
-                }],
-                "system":      TESTBENCH_SYSTEM,
-                "model":       model,
-                "temperature": 0.1,
-                "max_tokens":  8192,
-                "stream":      False,
-            },
-        )
-        resp.raise_for_status()
-        raw = resp.json()["content"]
+    raw = await call_llm(
+        messages=[{
+            "role":    "user",
+            "content": TESTBENCH_PROMPT.format(
+                simulator=simulator,
+                coverage_goals=coverage_goals,
+                spec=spec or "No spec provided.",
+                rtl_code=rtl_code[:6000],
+            ),
+        }],
+        system=TESTBENCH_SYSTEM,
+        model=model or "claude",
+        temperature=0.1,
+        max_tokens=8192,
+    )
 
     # Strip markdown fences
     raw = re.sub(r"^```(?:systemverilog|verilog|sv)?\s*", "", raw.strip(), flags=re.MULTILINE)
@@ -125,9 +126,10 @@ async def run(
         "testbench_code":  tb_code,
         "coverage_points": coverage_count,
         "assertion_count": assertion_count,
+        "simulator":       simulator,
         "warnings":        warnings,
         "summary": (
             f"TestbenchGen: {assertion_count} assertions, "
-            f"{coverage_count} coverpoints generated"
+            f"{coverage_count} coverpoints generated for {simulator}"
         ),
     }

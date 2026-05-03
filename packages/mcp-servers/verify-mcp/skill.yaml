@@ -1,0 +1,19 @@
+mcp_name:  verify-mcp
+binary:    verify-mcp
+transport: stdio
+env:
+  required: []
+  optional: [VIBE4FPGA_LLM, ANTHROPIC_API_KEY, OPENAI_API_KEY]
+skills:
+  - id: testbench_gen
+    tool: generate_testbench
+    summary: "Generate a self-checking SystemVerilog testbench for the supplied RTL module with optional coverage goals and simulator hints."
+    claude_trigger: "testbench|tb|cover|sim driver"
+    opencode_command: gen-tb
+    codex_alias: tb
+  - id: verification
+    tool: score_verification
+    summary: "Score a verification run across 5 stages (lint / sim / formal / synth / spec) and emit a Markdown narrative report."
+    claude_trigger: "verify|score|verification report"
+    opencode_command: score-verify
+    codex_alias: sv
