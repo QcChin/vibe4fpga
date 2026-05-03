@@ -1,8 +1,9 @@
 """CodeReview Skill — FPGA design pitfall checker.
 
 Combines:
-  1. Fast static lint (verilator + verible, ~12ms)
-  2. LLM deep analysis with FPGA-specific checklist
+  1. Fast static lint (verilator + verible, ~12ms) — external, deferred to
+     eda-bridge-mcp; this skill focuses on the LLM-driven deep analysis.
+  2. LLM deep analysis with FPGA-specific checklist.
 
 Checklist:
   - Latch inference (incomplete if/case without default)
@@ -18,10 +19,9 @@ Checklist:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-import httpx
+from .._llm import call_llm, parse_json_response
 
 CODE_REVIEW_SYSTEM = """\
 You are an expert FPGA RTL reviewer. Analyze the provided Verilog/SystemVerilog code
@@ -56,10 +56,9 @@ FPGA pitfalls to check:
 
 
 async def review_code(
-    rtl_code: str,
+    rtl_code:  str,
     file_name: str = "unknown.v",
-    router_url: str = "http://localhost:8765",
-    model: str = "claude",
+    model:     str = "claude",
 ) -> dict:
     """Run LLM-based code review on RTL code.
 
@@ -71,31 +70,19 @@ async def review_code(
             "summary":       str,
         }
     """
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            f"{router_url}/chat",
-            json={
-                "messages": [{
-                    "role": "user",
-                    "content": (
-                        f"Review this RTL file ({file_name}):\n\n"
-                        f"```verilog\n{rtl_code}\n```"
-                    ),
-                }],
-                "system":      CODE_REVIEW_SYSTEM,
-                "model":       model,
-                "temperature": 0.1,
-                "stream":      False,
-            },
-        )
-        resp.raise_for_status()
-        raw = resp.json()["content"]
+    raw = await call_llm(
+        messages=[{
+            "role":    "user",
+            "content": f"Review this RTL file ({file_name}):\n\n```verilog\n{rtl_code}\n```",
+        }],
+        system=CODE_REVIEW_SYSTEM,
+        model=model,
+        temperature=0.1,
+    )
 
-    # Parse JSON from response
-    import re
-    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
-    raw = re.sub(r"```\s*$", "", raw.strip(), flags=re.MULTILINE)
-    findings = json.loads(raw.strip())
+    findings = parse_json_response(raw)
+    if not isinstance(findings, list):
+        findings = []
 
     errors   = sum(1 for f in findings if f.get("severity") == "error")
     warnings = sum(1 for f in findings if f.get("severity") == "warning")
@@ -112,14 +99,10 @@ async def review_code(
     }
 
 
-async def review_file(
-    file_path: str,
-    router_url: str = "http://localhost:8765",
-    model: str = "claude",
-) -> dict:
+async def review_file(file_path: str, model: str = "claude") -> dict:
     """Review an RTL file from disk."""
     fp = Path(file_path)
     if not fp.exists():
         return {"error": f"File not found: {file_path}"}
-    code = fp.read_text(errors="replace")
-    return await review_code(code, file_name=fp.name, router_url=router_url, model=model)
+    code = fp.read_text(encoding="utf-8", errors="replace")
+    return await review_code(code, file_name=fp.name, model=model)

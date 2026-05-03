@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 
-import httpx
+from .._llm import call_llm, parse_json_response
 
 TIMING_FIX_SYSTEM = """\
 You are a senior FPGA timing closure engineer. Analyze the timing violation report
@@ -67,11 +67,10 @@ Suggest fixes for all paths with negative slack.
 
 async def run(
     timing_report: str,
-    wns: float | None = None,
-    tns: float | None = None,
-    rtl_context: str = "",
-    router_url: str = "http://localhost:8765",
-    model: str = "claude",
+    wns:           float | None = None,
+    tns:           float | None = None,
+    rtl_context:   str = "",
+    model:         str = "claude",
 ) -> dict:
     """Run TimingFix analysis.
 
@@ -80,7 +79,7 @@ async def run(
         wns:           Worst Negative Slack (ns). Auto-extracted if None.
         tns:           Total Negative Slack (ns). Auto-extracted if None.
         rtl_context:   Relevant RTL code snippets for context.
-        router_url:    LLM Router URL.
+        model:         LLM model key (see vibe4fpga-llm-client registry).
 
     Returns:
         {
@@ -91,7 +90,7 @@ async def run(
             "summary": str,
         }
     """
-    # Auto-extract WNS/TNS from report text
+    # Auto-extract WNS/TNS from report text when caller didn't pass them.
     if wns is None:
         m = re.search(r"WNS\(ns\)\s*([-\d.]+)", timing_report)
         wns = float(m.group(1)) if m else 0.0
@@ -108,36 +107,25 @@ async def run(
             "summary": f"Timing PASSED: WNS={wns:.3f} ns, TNS={tns:.3f} ns. No fixes needed.",
         }
 
-    # Count negative slack paths
     violations_found = len(re.findall(r"Slack\s*:\s*-[\d.]+", timing_report))
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            f"{router_url}/chat",
-            json={
-                "messages": [{
-                    "role": "user",
-                    "content": TIMING_REPORT_PROMPT.format(
-                        timing_report=timing_report[:4000],  # cap to avoid huge context
-                        wns=wns,
-                        tns=tns,
-                        rtl_context=rtl_context[:2000],
-                    ),
-                }],
-                "system":      TIMING_FIX_SYSTEM,
-                "model":       model,
-                "temperature": 0.1,
-                "stream":      False,
-            },
-        )
-        resp.raise_for_status()
-        raw = resp.json()["content"]
-
-    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
-    raw = re.sub(r"```\s*$", "", raw.strip(), flags=re.MULTILINE)
+    raw = await call_llm(
+        messages=[{
+            "role":    "user",
+            "content": TIMING_REPORT_PROMPT.format(
+                timing_report=timing_report[:4000],  # cap to avoid huge context
+                wns=wns,
+                tns=tns,
+                rtl_context=rtl_context[:2000],
+            ),
+        }],
+        system=TIMING_FIX_SYSTEM,
+        model=model,
+        temperature=0.1,
+    )
 
     try:
-        fixes = json.loads(raw.strip())
+        fixes = parse_json_response(raw)
     except json.JSONDecodeError:
         fixes = [{"raw_response": raw}]
 

@@ -1,0 +1,40 @@
+# Source-of-truth manifest consumed by tools/gen-skills/generate.py.
+# DO NOT hand-edit the generated SKILL.md / command.md / host configs.
+
+mcp_name:  fpga-project-mcp
+binary:    fpga-project-mcp
+transport: stdio
+
+env:
+  required: []
+  optional:
+    - VIBE4FPGA_LLM      # default model key (claude / gpt-4o / ollama / ...)
+    - ANTHROPIC_API_KEY  # required if VIBE4FPGA_LLM=claude (default)
+    - OPENAI_API_KEY     # required if VIBE4FPGA_LLM=openai or =deepseek
+
+skills:
+  - id:               spec2rtl
+    tool:             spec_to_rtl
+    summary:          "Convert a natural-language FPGA specification into synthesizable Verilog via a 5-stage pipeline (parse → ambiguity → context → generate → self-check)."
+    claude_trigger:   "spec|rtl|verilog|synthesize from english|natural language"
+    opencode_command: spec2rtl
+    codex_alias:      s2r
+    notes: |
+      Stage 3 (context injection) pulls naming conventions from the host's own
+      scanner — pass ``project_path`` in the tool call to activate. BLOCKING
+      ambiguities pause the pipeline and surface the open questions; ADVISORY
+      ambiguities are resolved autonomously and recorded in the audit trail.
+
+  - id:               code_review
+    tool:             review_rtl
+    summary:          "Review Verilog/SystemVerilog for 10 FPGA-specific pitfalls (latch inference, CDC, multi-driver, reset coverage, etc.) and emit severity-tagged findings."
+    claude_trigger:   "review|lint|check verilog|cdc|latch"
+    opencode_command: review
+    codex_alias:      rv
+
+  - id:               timing_fix
+    tool:             suggest_timing_fix
+    summary:          "Parse a Vivado timing summary and recommend per-path fixes across three strategies: pipeline register, multi-cycle path, or logic restructuring."
+    claude_trigger:   "timing|slack|wns|tns|critical path"
+    opencode_command: timing
+    codex_alias:      tf

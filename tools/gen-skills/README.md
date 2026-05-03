@@ -4,9 +4,9 @@ Generates host-specific adapter files from `packages/mcp-servers/*/skill.yaml`:
 
 * `.claude/skills/<id>/SKILL.md` — one per skill, Claude Code format
 * `.opencode/commands/<name>.md` — one per skill, OpenCode format
-* `build/claude-mcp-config.json` — all MCPs in one snippet for `~/.claude.json`
-* `build/codex-config.toml` — ditto for `~/.codex/config.toml`
-* `build/opencode-mcp-config.yaml` — ditto for OpenCode config
+* `configs/claude-mcp-config.json` — all MCPs in one snippet for `~/.claude.json`
+* `configs/codex-config.toml` — ditto for `~/.codex/config.toml`
+* `configs/opencode-mcp-config.yaml` — ditto for OpenCode config
 
 All outputs are committed. CI runs `--check` and fails on drift so
 `skill.yaml` stays the single source of truth.

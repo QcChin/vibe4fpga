@@ -14,9 +14,9 @@ Reads:
 Writes (committed to git — CI fails on diff):
     .claude/skills/<skill_id>/SKILL.md          # per-skill Claude Code skill
     .opencode/commands/<opencode_command>.md    # per-skill OpenCode command
-    build/codex-config.toml                     # all MCPs in one snippet
-    build/claude-mcp-config.json                # all MCPs in one snippet
-    build/opencode-mcp-config.yaml              # all MCPs in one snippet
+    configs/codex-config.toml                   # all MCPs in one snippet
+    configs/claude-mcp-config.json              # all MCPs in one snippet
+    configs/opencode-mcp-config.yaml            # all MCPs in one snippet
 
 Invocation:
     uv run --script tools/gen-skills/generate.py
@@ -41,10 +41,12 @@ TEMPLATES  = Path(__file__).parent / "templates"
 
 OUT_CLAUDE_SKILLS_DIR   = REPO_ROOT / ".claude" / "skills"
 OUT_OPENCODE_CMDS_DIR   = REPO_ROOT / ".opencode" / "commands"
-OUT_BUILD_DIR           = REPO_ROOT / "build"
-OUT_CODEX_TOML          = OUT_BUILD_DIR / "codex-config.toml"
-OUT_CLAUDE_MCP_JSON     = OUT_BUILD_DIR / "claude-mcp-config.json"
-OUT_OPENCODE_MCP_YAML   = OUT_BUILD_DIR / "opencode-mcp-config.yaml"
+# Fleet-level host config snippets live under configs/ (not build/, which is
+# the conventional gitignored Python build dir).
+OUT_CONFIGS_DIR         = REPO_ROOT / "configs"
+OUT_CODEX_TOML          = OUT_CONFIGS_DIR / "codex-config.toml"
+OUT_CLAUDE_MCP_JSON     = OUT_CONFIGS_DIR / "claude-mcp-config.json"
+OUT_OPENCODE_MCP_YAML   = OUT_CONFIGS_DIR / "opencode-mcp-config.yaml"
 
 
 # ── Data model ───────────────────────────────────────────────────────────────

@@ -14,17 +14,14 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
 
-import httpx
-
+from .._llm import call_llm, parse_json_response
 from .models import (
     AmbiguityItem,
     AmbiguityLevel,
     DesignIntent,
     SelfCheckResult,
     Spec2RTLResult,
-    TimingConstraint,
 )
 from .prompts import (
     AMBIGUITY_DETECTOR_SYSTEM,
@@ -38,52 +35,17 @@ from .prompts import (
 )
 
 
-# ── LLM Router client ─────────────────────────────────────────────────────────
-
-async def _llm_call(
-    messages: list[dict],
-    system: str,
-    router_url: str,
-    model: str = "claude",
-    temperature: float = 0.3,
-) -> str:
-    """Call the LLM Router and return the full response text."""
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            f"{router_url}/chat",
-            json={
-                "messages":    messages,
-                "system":      system,
-                "model":       model,
-                "temperature": temperature,
-                "stream":      False,
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()["content"]
-
-
-def _parse_json(text: str) -> Any:
-    """Extract and parse JSON from LLM response (handles markdown fences)."""
-    # Strip markdown code fences if present
-    text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.MULTILINE)
-    text = re.sub(r"```\s*$", "", text.strip(), flags=re.MULTILINE)
-    return json.loads(text.strip())
-
-
 # ── Stage 1: Spec Parser ──────────────────────────────────────────────────────
 
-async def stage1_parse_spec(spec: str, router_url: str, model: str) -> DesignIntent:
+async def stage1_parse_spec(spec: str, model: str) -> DesignIntent:
     """Decompose natural language spec into structured DesignIntent."""
-    raw = await _llm_call(
+    raw = await call_llm(
         messages=[{"role": "user", "content": SPEC_PARSER_USER.format(spec=spec)}],
         system=SPEC_PARSER_SYSTEM,
-        router_url=router_url,
         model=model,
         temperature=0.1,
     )
-    data = _parse_json(raw)
-    intent = DesignIntent(**data)
+    intent = DesignIntent(**parse_json_response(raw))
     intent.raw_spec = spec
     return intent
 
@@ -92,12 +54,11 @@ async def stage1_parse_spec(spec: str, router_url: str, model: str) -> DesignInt
 
 async def stage2_detect_ambiguities(
     intent: DesignIntent,
-    spec: str,
-    router_url: str,
-    model: str,
+    spec:   str,
+    model:  str,
 ) -> list[AmbiguityItem]:
     """Identify BLOCKING (must ask) and ADVISORY (autonomous decision) ambiguities."""
-    raw = await _llm_call(
+    raw = await call_llm(
         messages=[{
             "role": "user",
             "content": AMBIGUITY_DETECTOR_USER.format(
@@ -106,64 +67,56 @@ async def stage2_detect_ambiguities(
             ),
         }],
         system=AMBIGUITY_DETECTOR_SYSTEM,
-        router_url=router_url,
         model=model,
         temperature=0.1,
     )
-    items_data = _parse_json(raw)
-    return [AmbiguityItem(**item) for item in items_data]
+    return [AmbiguityItem(**item) for item in parse_json_response(raw)]
 
 
 # ── Stage 3: Context Injector ─────────────────────────────────────────────────
 
-async def stage3_inject_context(
-    intent: DesignIntent,
-    project_path: str | None,
-    fpga_project_mcp_url: str | None,
-) -> str:
-    """Fetch naming conventions and similar module skeletons from fpga-project-mcp.
+async def stage3_inject_context(project_path: str | None) -> str:
+    """Fetch naming conventions + module skeletons *from within this MCP*.
 
-    Returns a context string for the RTL generator (≤1000 tokens).
-    Returns empty string if no project path is available.
+    In the pre-pivot architecture this called fpga-project-mcp over HTTP.
+    We're *in* fpga-project-mcp now, so we call the scanner directly — saves a
+    network round-trip and removes the last non-LLM HTTP dependency from this
+    skill.
+
+    Returns a context string capped at ~750 tokens for the RTL generator.
+    Returns empty string when no project path is supplied.
     """
-    if not project_path or not fpga_project_mcp_url:
+    if not project_path:
         return ""
 
-    context_parts: list[str] = []
+    # Local imports to keep stage1/2/4/5 free of scanner deps at module load.
+    from ...scanner import analyze_naming_conventions, scan
 
+    parts: list[str] = []
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            # Naming conventions
-            resp = await client.post(
-                f"{fpga_project_mcp_url}/tools/analyze_naming_conventions_tool",
-                json={"project_path": project_path},
-            )
-            if resp.status_code == 200:
-                conventions = resp.json()
-                if conventions:
-                    context_parts.append(
-                        "Project naming conventions:\n"
-                        + json.dumps(conventions, indent=2)
-                    )
-    except Exception:
-        pass  # Context injection is best-effort
+        result = scan(project_path)
+    except Exception:  # best-effort — a broken project should not kill the skill
+        return ""
 
-    return "\n\n".join(context_parts)[:3000]  # cap to ~750 tokens
+    conventions = analyze_naming_conventions(result)
+    if conventions:
+        parts.append("Project naming conventions:\n" + json.dumps(conventions, indent=2))
+
+    return "\n\n".join(parts)[:3000]
 
 
 # ── Stage 4: RTL Generator ────────────────────────────────────────────────────
 
 async def stage4_generate_rtl(
-    intent: DesignIntent,
+    intent:             DesignIntent,
     declared_decisions: list[str],
-    context: str,
-    router_url: str,
-    model: str,
+    context:            str,
+    model:              str,
 ) -> str:
     """Generate synthesizable RTL from design intent (temperature=0.1)."""
     decisions_text = "\n".join(f"- {d}" for d in declared_decisions) if declared_decisions else "None"
 
-    raw = await _llm_call(
+    raw = await call_llm(
         messages=[{
             "role": "user",
             "content": RTL_GENERATOR_USER.format(
@@ -172,28 +125,26 @@ async def stage4_generate_rtl(
             ),
         }],
         system=RTL_GENERATOR_SYSTEM.format(context=context or "No project context available."),
-        router_url=router_url,
         model=model,
-        temperature=0.1,   # low temperature for deterministic, rule-following code
+        temperature=0.1,
     )
 
-    # Strip accidental markdown fences
-    raw = re.sub(r"^```(?:verilog|systemverilog|sv)?\s*", "", raw.strip(), flags=re.MULTILINE)
-    raw = re.sub(r"```\s*$", "", raw.strip(), flags=re.MULTILINE)
-    return raw.strip()
+    # Strip accidental markdown fences.
+    cleaned = re.sub(r"^```(?:verilog|systemverilog|sv)?\s*", "", raw.strip(), flags=re.MULTILINE)
+    cleaned = re.sub(r"```\s*$", "", cleaned.strip(), flags=re.MULTILINE)
+    return cleaned.strip()
 
 
 # ── Stage 5: Self-Check ───────────────────────────────────────────────────────
 
 async def stage5_self_check(
-    spec: str,
-    intent: DesignIntent,
+    spec:     str,
+    intent:   DesignIntent,
     rtl_code: str,
-    router_url: str,
-    model: str,
+    model:    str,
 ) -> list[SelfCheckResult]:
     """Second independent LLM call audits the generated RTL."""
-    raw = await _llm_call(
+    raw = await call_llm(
         messages=[{
             "role": "user",
             "content": SELF_CHECK_USER.format(
@@ -203,62 +154,52 @@ async def stage5_self_check(
             ),
         }],
         system=SELF_CHECK_SYSTEM,
-        router_url=router_url,
         model=model,
         temperature=0.1,
     )
-    items_data = _parse_json(raw)
-    return [SelfCheckResult(**item) for item in items_data]
+    return [SelfCheckResult(**item) for item in parse_json_response(raw)]
 
 
 def _compute_score(checks: list[SelfCheckResult]) -> float:
-    """Compute verification score from self-check results."""
-    score = 100.0
-    for check in checks:
-        if check.status == "FAIL":
-            score -= 12.0
+    """Compute verification score — 100 minus 12 per FAIL, floored at 0."""
+    score = 100.0 - sum(12.0 for c in checks if c.status == "FAIL")
     return max(0.0, score)
 
 
 # ── Main pipeline entry point ─────────────────────────────────────────────────
 
 async def run(
-    spec: str,
-    router_url: str = "http://localhost:8765",
-    model: str = "claude",
-    project_path: str | None = None,
-    fpga_project_mcp_url: str | None = None,
-    max_repair_rounds: int = 2,
+    spec:              str,
+    model:             str        = "claude",
+    project_path:      str | None = None,
+    max_repair_rounds: int        = 2,
 ) -> Spec2RTLResult:
     """Run the full 5-stage Spec2RTL pipeline.
 
     Args:
-        spec:                  Natural language design specification.
-        router_url:            LLM Router URL.
-        model:                 LLM backend key ("claude" | "ollama").
-        project_path:          Optional project root for context injection.
-        fpga_project_mcp_url:  Optional fpga-project-mcp endpoint for context.
-        max_repair_rounds:     Max auto-repair iterations on FAIL checks.
-
-    Returns:
-        Spec2RTLResult with RTL code, score, and audit trail.
+        spec:              Natural-language design specification.
+        model:             LLM backend key (see vibe4fpga-llm-client registry).
+        project_path:      Optional project root for context injection.
+                           When supplied, stage 3 pulls naming conventions
+                           from this MCP's scanner directly (no HTTP).
+        max_repair_rounds: Upper bound on stage 4→5 repair iterations
+                           triggered by FAIL self-checks.
     """
-    # Stage 1
-    intent = await stage1_parse_spec(spec, router_url, model)
+    # Stage 1.
+    intent = await stage1_parse_spec(spec, model)
 
-    # Stage 2
-    ambiguities = await stage2_detect_ambiguities(intent, spec, router_url, model)
-    blocking = [a for a in ambiguities if a.level == AmbiguityLevel.BLOCKING]
-    advisory = [a for a in ambiguities if a.level == AmbiguityLevel.ADVISORY]
+    # Stage 2.
+    ambiguities = await stage2_detect_ambiguities(intent, spec, model)
+    blocking  = [a for a in ambiguities if a.level == AmbiguityLevel.BLOCKING]
+    advisory  = [a for a in ambiguities if a.level == AmbiguityLevel.ADVISORY]
 
-    # Collect declared decisions from ADVISORY items
     declared_decisions = [
         f"{a.question} → {a.autonomous_decision}"
         for a in advisory
         if a.autonomous_decision
     ]
 
-    # If BLOCKING ambiguities exist, return them for engineer to resolve
+    # BLOCKING ambiguities pause the pipeline and hand control back.
     if blocking:
         return Spec2RTLResult(
             module_name=intent.module_name,
@@ -275,24 +216,21 @@ async def run(
             declared_decisions=declared_decisions,
         )
 
-    # Stage 3
-    context = await stage3_inject_context(intent, project_path, fpga_project_mcp_url)
+    # Stage 3 (in-process scanner call — no HTTP).
+    context = await stage3_inject_context(project_path)
 
-    # Stage 4 + 5 with repair loop
+    # Stages 4 + 5 with a bounded repair loop.
     rtl_code = ""
     checks: list[SelfCheckResult] = []
 
     for round_no in range(max_repair_rounds + 1):
-        rtl_code = await stage4_generate_rtl(
-            intent, declared_decisions, context, router_url, model
-        )
-        checks = await stage5_self_check(spec, intent, rtl_code, router_url, model)
+        rtl_code = await stage4_generate_rtl(intent, declared_decisions, context, model)
+        checks   = await stage5_self_check(spec, intent, rtl_code, model)
 
         failed = [c for c in checks if c.status == "FAIL"]
         if not failed or round_no == max_repair_rounds:
             break
 
-        # Repair: append failure context to declared decisions and regenerate
         declared_decisions.append(
             f"[Repair round {round_no + 1}] Fix these issues: "
             + "; ".join(f.note for f in failed)

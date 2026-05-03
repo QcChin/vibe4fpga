@@ -4,22 +4,56 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fpga-project-mcp"
-version = "0.1.0"
-description = "FPGA Project Indexing MCP Server"
-requires-python = ">=3.11"
+version = "0.2.0"
+description = "MCP server for FPGA project indexing, module hierarchy, and 3 LLM-backed skills (spec2rtl, code_review, suggest_timing_fix)."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "vibe4fpga contributors" }]
+keywords = ["mcp", "fpga", "verilog", "systemverilog", "spec2rtl", "timing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+]
 dependencies = [
     "mcp>=1.0.0",
     "pydantic>=2.6.0",
     "networkx>=3.2.0",
     "pygments>=2.17.0",
-    "sentence-transformers>=2.7.0",
+    "vibe4fpga-llm-client>=0.1.0",
+    "vibe4fpga-platform>=0.1.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "ruff>=0.4.0"]
+# sentence-transformers is a ~300MB torch-transitive dep; gate it behind an extra
+# so a plain `uv tool install fpga-project-mcp` stays lean. Enable only when
+# the user actually wants vector-search over module descriptions.
+embed = [
+    "sentence-transformers>=2.7.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+    "vibe4fpga-mcp-testkit",
+]
 
 [project.scripts]
 fpga-project-mcp = "fpga_project_mcp.server:main"
 
+[tool.uv.sources]
+vibe4fpga-llm-client  = { path = "../../shared/llm-client",  editable = true }
+vibe4fpga-platform    = { path = "../../shared/platform",    editable = true }
+vibe4fpga-mcp-testkit = { path = "../../shared/mcp-testkit", editable = true }
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/fpga_project_mcp"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
