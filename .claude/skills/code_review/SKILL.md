@@ -23,7 +23,10 @@ Review Verilog/SystemVerilog for 10 FPGA-specific pitfalls (latch inference, CDC
 **Optional:**
 - `VIBE4FPGA_LLM`
 - `ANTHROPIC_API_KEY`
+- `ANTHROPIC_AUTH_TOKEN`
+- `ANTHROPIC_BASE_URL`
 - `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
 
 
 ## How Claude Code should use this skill

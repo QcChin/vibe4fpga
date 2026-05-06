@@ -12,11 +12,11 @@ command = "eda-bridge-mcp"
 
 [mcp_servers.fpga-project-mcp]
 command = "fpga-project-mcp"
-# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, OPENAI_API_KEY
+# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, OPENAI_API_KEY, OPENAI_BASE_URL
 
 [mcp_servers.instrument-mcp]
 command = "instrument-mcp"
-# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, OPENAI_API_KEY
+# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, OPENAI_API_KEY, OPENAI_BASE_URL
 
 [mcp_servers.quartus-mcp]
 command = "quartus-mcp"
@@ -24,11 +24,11 @@ command = "quartus-mcp"
 
 [mcp_servers.verify-mcp]
 command = "verify-mcp"
-# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, OPENAI_API_KEY
+# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, OPENAI_API_KEY, OPENAI_BASE_URL
 
 [mcp_servers.waveform-mcp]
 command = "waveform-mcp"
-# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, OPENAI_API_KEY
+# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, OPENAI_API_KEY, OPENAI_BASE_URL
 
 [mcp_servers.waveform-mcp-rs]
 command = "waveform-mcp-rs"

@@ -122,15 +122,26 @@ def _prepare_messages(
 class OpenAIAdapter(BaseAdapter):
     """Adapter for OpenAI GPT models via the openai>=1.20.0 AsyncOpenAI client."""
 
-    def __init__(self, api_key: str, model_key: str = "openai") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model_key: str = "openai",
+        base_url: str | None = None,
+    ) -> None:
         """Initialise the adapter.
 
         Args:
             api_key:   OpenAI API key.
             model_key: Logical model alias; resolved through MODEL_MAP.
                        Falls back to ``gpt-4o`` for unknown keys.
+            base_url:  Optional endpoint override for third-party
+                       OpenAI-compatible aggregators/proxies. Leave ``None``
+                       to use the public OpenAI endpoint.
         """
-        self._client = AsyncOpenAI(api_key=api_key)
+        kwargs: dict = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._client = AsyncOpenAI(**kwargs)
         self._model = MODEL_MAP.get(model_key, "gpt-4o")
 
     async def complete(

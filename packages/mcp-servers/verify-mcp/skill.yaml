@@ -3,7 +3,13 @@ binary:    verify-mcp
 transport: stdio
 env:
   required: []
-  optional: [VIBE4FPGA_LLM, ANTHROPIC_API_KEY, OPENAI_API_KEY]
+  optional:
+    - VIBE4FPGA_LLM         # default model key (claude / gpt-4o / ollama / ...)
+    - ANTHROPIC_API_KEY     # Claude, direct api.anthropic.com (x-api-key)
+    - ANTHROPIC_AUTH_TOKEN  # Claude, Bearer-token proxy / OAuth (alt to API_KEY)
+    - ANTHROPIC_BASE_URL    # Claude, override endpoint (for proxies)
+    - OPENAI_API_KEY        # required if VIBE4FPGA_LLM=openai or =deepseek
+    - OPENAI_BASE_URL       # OpenAI, override endpoint (for third-party aggregators)
 skills:
   - id: testbench_gen
     tool: generate_testbench

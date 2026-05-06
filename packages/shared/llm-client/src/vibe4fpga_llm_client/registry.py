@@ -4,15 +4,25 @@ The registry keeps vendor SDK imports *lazy* so that callers who only use
 Claude don't pay the import cost of OpenAI / Gemini / etc., and so a missing
 optional dependency only fails if the backend is actually requested.
 
-Environment variables read (in order of precedence):
+Environment variables read:
 
 * ``VIBE4FPGA_LLM``        — default backend key when ``model_key`` is None
-* ``ANTHROPIC_API_KEY``    — Claude family
+* ``ANTHROPIC_API_KEY``    — Claude family, direct API (x-api-key)
+* ``ANTHROPIC_AUTH_TOKEN`` — Claude family, Bearer-token proxy / OAuth
+                             (alternative to ANTHROPIC_API_KEY; at least
+                             one of the two must be set)
+* ``ANTHROPIC_BASE_URL``   — Claude family, override endpoint (optional,
+                             for custom proxies / gateways)
 * ``OPENAI_API_KEY``       — OpenAI + DeepSeek (via openai_compat)
+* ``OPENAI_BASE_URL``      — OpenAI, override endpoint (optional, for
+                             third-party OpenAI-compatible aggregators)
 * ``DEEPSEEK_API_KEY``     — explicit override for DeepSeek
 * ``GEMINI_API_KEY`` / ``GOOGLE_API_KEY`` — Gemini
 * ``OLLAMA_BASE_URL``      — Ollama / RTLCoder HTTP endpoint (default ``http://localhost:11434``)
 * ``OLLAMA_MODEL``         — model name for generic Ollama backend (default ``llama3.2``)
+
+Precedence when both ``ANTHROPIC_API_KEY`` and ``ANTHROPIC_AUTH_TOKEN`` are
+set: ``ANTHROPIC_API_KEY`` wins (matches the Anthropic SDK's own priority).
 """
 
 from __future__ import annotations
@@ -95,25 +105,38 @@ def adapter_from_env(model_key: str | None = None) -> "BaseAdapter":
 
     # ── Claude ─────────────────────────────────────────────────────────────
     if backend == "claude":
-        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-        if not api_key:
-            raise AuthError("ANTHROPIC_API_KEY is not set")
+        api_key    = os.getenv("ANTHROPIC_API_KEY",    "").strip() or None
+        auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip() or None
+        base_url   = os.getenv("ANTHROPIC_BASE_URL",   "").strip() or None
+        if not api_key and not auth_token:
+            raise AuthError(
+                "Neither ANTHROPIC_API_KEY nor ANTHROPIC_AUTH_TOKEN is set. "
+                "Set ANTHROPIC_API_KEY for direct api.anthropic.com access, "
+                "or ANTHROPIC_AUTH_TOKEN for Bearer-token proxies / gateways "
+                "(optionally combined with ANTHROPIC_BASE_URL)."
+            )
         try:
             from .claude import ClaudeAdapter
         except ImportError as exc:
             raise MissingDependencyError("claude", extra or "claude", exc) from exc
-        return ClaudeAdapter(api_key=api_key, model_key=key)
+        return ClaudeAdapter(
+            api_key=api_key,
+            auth_token=auth_token,
+            base_url=base_url,
+            model_key=key,
+        )
 
     # ── OpenAI ─────────────────────────────────────────────────────────────
     if backend == "openai":
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        api_key  = os.getenv("OPENAI_API_KEY",  "").strip()
+        base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
         if not api_key:
             raise AuthError("OPENAI_API_KEY is not set")
         try:
             from .openai_compat import OpenAIAdapter
         except ImportError as exc:
             raise MissingDependencyError("openai", extra or "openai", exc) from exc
-        return OpenAIAdapter(api_key=api_key, model_key=key)
+        return OpenAIAdapter(api_key=api_key, model_key=key, base_url=base_url)
 
     # ── DeepSeek (OpenAI-compatible endpoint, think-block stripping) ────────
     if backend == "deepseek":
