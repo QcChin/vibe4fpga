@@ -29,7 +29,12 @@ class DesignIntent(BaseModel):
     interfaces: list[InterfaceSignal] = Field(default_factory=list)
     timing: TimingConstraint = Field(default_factory=TimingConstraint)
     functional_behavior: str = ""
-    state_machine: dict | None = None   # FSM description if applicable
+    # FSM description if applicable. Accepts either a structured dict (preferred,
+    # with keys like "states" / "transitions" / "default_state") or a free-text
+    # string — LLM Stage 1 output varies depending on FSM complexity, and a
+    # short string description still carries enough intent for Stage 4 to
+    # generate correct RTL.
+    state_machine: dict | str | None = None
     raw_spec: str = ""
 
 

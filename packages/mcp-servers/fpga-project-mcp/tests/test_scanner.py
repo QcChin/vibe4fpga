@@ -76,9 +76,11 @@ def test_scan_finds_both_modules(tiny_project: Path) -> None:
 
 def test_hierarchy_picks_top(tiny_project: Path) -> None:
     result = scan(str(tiny_project))
-    tree   = build_hierarchy(result, top_module=None)
-    assert tree["module"] == "top"
-    children = {c["module"] for c in tree.get("children", [])}
+    hierarchy = build_hierarchy(result, top_module=None)
+    assert hierarchy["roots"] == ["top"]
+    top_tree = hierarchy["trees"][0]
+    assert top_tree["name"] == "top"
+    children = {c["name"] for c in top_tree.get("children", [])}
     assert "sub_counter" in children
 
 

@@ -76,14 +76,17 @@ def test_claude_adapter_loads_when_extra_is_installed(monkeypatch: pytest.Monkey
 
 
 def test_missing_api_key_surfaces_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """adapter_from_env('claude') with no ANTHROPIC_API_KEY → AuthError.
+    """adapter_from_env('claude') with no Claude auth env → AuthError.
 
     Catches a regression where the registry silently swallows the missing
-    key and returns a half-built adapter that explodes on first use.
+    credentials and returns a half-built adapter that explodes on first use.
+    Clears both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN because either is
+    sufficient auth (x-api-key vs Bearer-token proxy).
     """
     from vibe4fpga_llm_client.errors import AuthError
 
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY",    raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     with pytest.raises(AuthError, match="ANTHROPIC_API_KEY"):
         adapter_from_env("claude")
 
