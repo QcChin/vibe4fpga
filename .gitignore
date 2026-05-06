@@ -25,6 +25,9 @@ venv/
 ENV/
 .uv/
 
+# uv lockfiles — not committed; each contributor's install resolves its own
+uv.lock
+
 # IDE
 .idea/
 *.swp
@@ -52,5 +55,9 @@ qdrant_storage/
 *.env.local
 .env.*.local
 
-# Claude
-CLAUDE.md
+# Claude — user-local overrides (the committed CLAUDE.md is force-added)
+.claude/settings.local.json
+# Historical note: CLAUDE.md used to be ignored so every contributor could
+# keep a personal one. A committed baseline now lives at the repo root
+# (force-added); uncomment the line below if you want to hide local edits.
+# CLAUDE.md
