@@ -61,3 +61,17 @@ qdrant_storage/
 # keep a personal one. A committed baseline now lives at the repo root
 # (force-added); uncomment the line below if you want to hide local edits.
 # CLAUDE.md
+
+# Simulation / EDA artifacts — local-only outputs from running the demos.
+# VCDs end up wherever the testbench's $dumpfile points (often the iverilog
+# CWD, which can be an MCP package dir — see bug #10 follow-up).
+*.vcd
+*.vvp
+*.fst
+examples/**/_gen_tb.*
+
+# External upstream repos cloned into the workspace for demos / verification
+# (e.g. examples/external/wbuart32 from ZipCPU). Keep the directory itself
+# untracked so contributors can pick any branch / fork.
+examples/external/
+
