@@ -1,5 +1,7 @@
 # Integration — OpenCode
 
+> 🌐 [中文](integration-opencode.zh.md) · **English**
+
 ## Prerequisites
 
 * **uv** 0.4+
@@ -77,7 +79,7 @@ Then:
 /mcp list
 ```
 
-Should print 9 servers, all `connected`. Try:
+Should print 8 servers, all `connected`. Try:
 
 ```
 /spec2rtl Write a 4-bit saturating counter with synchronous reset.

@@ -1,5 +1,7 @@
 # Mac dev setup (for a Windows target)
 
+> 🌐 [中文](mac-dev-setup.zh.md) · **English**
+
 The MCPs run in production on Windows, but day-to-day development happens
 on macOS. This guide describes how to write and test code on Mac with
 realistic coverage of Windows-specific behaviour.
@@ -13,7 +15,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Python 3.12
 brew install python@3.12
 
-# Shared libs + all 9 MCPs in editable mode
+# Shared libs + all 8 MCPs in editable mode
 make install
 
 # Verify

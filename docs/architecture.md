@@ -1,5 +1,7 @@
 # Architecture
 
+> 🌐 [中文](architecture.zh.md) · **English**
+
 vibe4fpga is an **MCP-first** monorepo: each capability lives behind a
 stdio MCP server, and the agent host (Claude Code / Codex / OpenCode) is
 responsible for orchestration — planning, tool selection, multi-turn

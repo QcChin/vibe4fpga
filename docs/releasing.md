@@ -1,5 +1,7 @@
 # Releasing
 
+> 🌐 [中文](releasing.zh.md) · **English**
+
 All 9 Python packages (3 shared + 7 MCPs — `mcp-testkit` is dev-only and
 not published) plus the Rust MCP ship from a single tag. The workflow
 lives at [`.github/workflows/release.yml`](../.github/workflows/release.yml).
@@ -23,7 +25,7 @@ this repo + workflow as a trusted publisher. Do this once per package:
      - Workflow name: `release.yml`
      - Environment name: `release` (must match the `environment: release`
        line in the publish job)
-3. Repeat for the other 9 packages.
+3. Repeat for the other 8 packages.
 
 Package names to register (check each `pyproject.toml` for the exact string):
 
@@ -53,23 +55,23 @@ New environment → `release`). You can:
 
 ```bash
 # 1. Bump versions in all pyproject.toml files that changed since last tag.
-#    Shared libs on their own cadence; MCPs stay in lockstep at v0.2.0.
+#    Shared libs on their own cadence; MCPs stay in lockstep at v0.3.0.
 
 # 2. Sanity check local state:
 make gen-skills-check    # no drift
 make test                # tier 1+2 green
 
 # 3. Commit any last changes, push, and tag:
-git tag -a v0.2.0 -m "Release 0.2.0"
+git tag -a v0.3.0 -m "Release 0.3.0"
 git push origin develop
-git push origin v0.2.0
+git push origin v0.3.0
 ```
 
 The tag push triggers `.github/workflows/release.yml`. Jobs run in this
 order:
 
 ```
-preflight  ──┬─► python-build (10 packages, parallel)  ──► python-publish (OIDC)
+preflight  ──┬─► python-build (9 packages, parallel)   ──► python-publish (OIDC)
              │
              └─► rust-build   (mac + win, parallel)     ──┐
                                                           │
@@ -78,7 +80,7 @@ preflight  ──┬─► python-build (10 packages, parallel)  ──► pytho
 ```
 
 A failure in any `python-build` matrix cell skips its corresponding
-`python-publish` job but doesn't block the other nine. The Rust job is
+`python-publish` job but doesn't block the other eight. The Rust job is
 independent. The GitHub release job runs only after both upstream legs
 finish.
 
@@ -94,12 +96,13 @@ branch without publishing.
 
 ## Package-name inconsistency note
 
-The 8 pre-pivot MCPs publish under their bare name (`fpga-project-mcp`,
-`eda-bridge-mcp`, ...); `verify-mcp` (added in the pivot) uses
-`vibe4fpga-verify-mcp`. Renaming the 8 older ones to match would break
-existing local `uv tool install` users; we're leaving them as-is. The
-`configs/*` host snippets reference the *entry point* names (which are
-all `<mcp>-mcp`), not the PyPI names, so users don't see the split.
+The 7 pre-pivot Python MCPs publish under their bare name
+(`fpga-project-mcp`, `eda-bridge-mcp`, ...); `verify-mcp` (added in the
+pivot) uses `vibe4fpga-verify-mcp`. Renaming the 7 older ones to match
+would break existing local `uv tool install` users; we're leaving them
+as-is. The `configs/*` host snippets reference the *entry point* names
+(which are all `<mcp>-mcp`), not the PyPI names, so users don't see the
+split.
 
 ## After publishing
 

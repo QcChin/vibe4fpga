@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> 🌐 [中文](CLAUDE.zh.md) · **English**
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Repository shape

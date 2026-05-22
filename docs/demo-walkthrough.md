@@ -1,6 +1,8 @@
 # End-to-end demo walkthrough
 
-A concrete 10-minute demo you can run today that exercises five of the nine
+> 🌐 [中文](demo-walkthrough.zh.md) · **English**
+
+A concrete 10-minute demo you can run today that exercises five of the eight
 MCPs in sequence. Uses the tiny [`saturating_counter`](../examples/saturating_counter/)
 DUT as a worked example.
 

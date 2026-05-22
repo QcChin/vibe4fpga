@@ -1,5 +1,7 @@
 # Windows setup
 
+> 🌐 [中文](windows-setup.zh.md) · **English**
+
 The MCPs are developed on macOS and tested on macOS **and** Windows CI,
 but the production target is Windows. A few Windows-specific settings
 matter.

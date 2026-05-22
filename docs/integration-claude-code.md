@@ -1,5 +1,7 @@
 # Integration — Claude Code
 
+> 🌐 [中文](integration-claude-code.zh.md) · **English**
+
 ## Prerequisites
 
 * **uv** 0.4+ (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
@@ -23,7 +25,7 @@ uv sync --all-extras
 uv tool install .   # exposes `fpga-project-mcp` on your PATH
 ```
 
-Repeat for the eight other MCPs you want active.
+Repeat for the seven other MCPs you want active.
 
 ## Configure `~/.claude.json`
 

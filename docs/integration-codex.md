@@ -1,5 +1,7 @@
 # Integration — Codex CLI
 
+> 🌐 [中文](integration-codex.zh.md) · **English**
+
 ## Prerequisites
 
 * **uv** 0.4+
@@ -79,7 +81,7 @@ you can mention in prompts (e.g. "use s2r" to nudge toward
 codex --list-mcp
 ```
 
-Should enumerate all 9 MCPs with status `connected`.
+Should enumerate all 8 MCPs with status `connected`.
 
 Then trigger a quick round-trip:
 
