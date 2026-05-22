@@ -1,12 +1,10 @@
 """Tier 1 smoke tests — stdio handshake + list_tools for the Rust MCP binary.
 
-Unlike the Python siblings, waveform-mcp-rs is a Rust binary. The
-``vibe4fpga_mcp_testkit`` harness spawns any stdio MCP the same way
-(``command = <name>`` on PATH), so the test shape is identical — we just
-skip when ``cargo build --release`` has not produced the binary.
-
-The four tools asserted here mirror src/main.rs `list_tools`; no LLM calls
-are made, so there is no skill-tool counterpart.
+waveform-mcp-rs absorbed the Python `waveform-mcp` package as of v0.3.0.
+The binary now exposes 7 tools: 4 pure-parsing tools, 2 protocol/source
+helpers, and 1 LLM-backed skill (`debug_waveform`). The smoke test only
+asserts tool registration — the LLM step is exercised by Rust integration
+tests gated on ANTHROPIC_* env vars.
 """
 
 from __future__ import annotations
@@ -31,6 +29,9 @@ EXPECTED_TOOLS = {
     "extract_signal_events",
     "get_signal_stats",
     "summarize_waveform",
+    "decode_axi",
+    "map_signal_to_rtl",
+    "debug_waveform",
 }
 
 
@@ -41,7 +42,7 @@ async def test_handshake() -> None:
 
 
 async def test_list_tools_covers_expected_set() -> None:
-    """All 4 pure VCD-parsing tools are registered."""
+    """All 7 tools (4 parsing + 2 helpers + 1 skill) are registered."""
     async with stdio_server_spawn("waveform-mcp-rs") as client:
         names = set(await client.list_tools_names())
         missing = EXPECTED_TOOLS - names

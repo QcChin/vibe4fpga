@@ -33,9 +33,9 @@ command = "fpga-project-mcp"
 command = "eda-bridge-mcp"
 # Optional env vars: VIVADO_ROOT, VIVADO_PATH
 
-[mcp_servers.waveform-mcp]
-command = "waveform-mcp"
-# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, OPENAI_API_KEY
+[mcp_servers.waveform-mcp-rs]
+command = "waveform-mcp-rs"
+# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL
 
 # ... one [mcp_servers.<name>] section per MCP ...
 ```

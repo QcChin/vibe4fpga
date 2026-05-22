@@ -17,8 +17,8 @@ conversation, retry loops.
              │                   │                              │
              ▼                   ▼                              ▼
 ┌──────────────────────┐  ┌──────────────────────┐  ┌─────────────────────────┐
-│ fpga-project-mcp  9  │  │ waveform-mcp      6  │  │ eda-bridge-mcp       5  │
-│  scan / review / ... │  │  vcd / debug / ...   │  │  vivado / verilator... │
+│ fpga-project-mcp  9  │  │ waveform-mcp-rs   7  │  │ eda-bridge-mcp       5  │
+│  scan / review / ... │  │  vcd / debug / axi   │  │  vivado / verilator... │
 └──────────┬───────────┘  └──────────┬───────────┘  └───────────┬────────────┘
            │                         │                          │
            └─────── shared libs ─────┴──────── shared libs ─────┘
@@ -31,8 +31,10 @@ conversation, retry loops.
           └─────────────────┘              └───────────────────┘
 ```
 
-(Plus 6 more MCPs: `instrument-mcp`, `datasheet-mcp`, `quartus-mcp`,
-`yosys-mcp`, `verify-mcp`, `waveform-mcp-rs`.)
+(Plus 5 more MCPs: `instrument-mcp`, `datasheet-mcp`, `quartus-mcp`,
+`yosys-mcp`, `verify-mcp`. The unified Rust `waveform-mcp-rs` shown above
+replaced the former Python `waveform-mcp` in v0.3.0 — same 7-tool surface,
+with a built-in Anthropic HTTP client backing the `debug_waveform` skill.)
 
 ## Why MCP-first
 
@@ -42,7 +44,7 @@ stack with plain MCPs. Rationale:
 * **Every host already runs an agent loop.** Claude Code / Codex / OpenCode
   each have built-in planner/executor/evaluator. Our old `agent_loop` was
   reinventing that wheel.
-* **One backend, three hosts.** MCP is the intersection: we ship nine
+* **One backend, three hosts.** MCP is the intersection: we ship eight
   servers, users pick any host.
 * **No router process to babysit.** Skills are regular MCP tools; the
   adapter library (`vibe4fpga-llm-client`) is linked into each MCP that
@@ -131,7 +133,7 @@ full table; highlights:
   `platform.run` forces UTF-8 in the child env.
 * **R1** — Windows 260-char path limit. Mitigation: `platform.long_path`
   applies `\\?\` prefix automatically when needed.
-* **R10** — `vibe4fpga-llm-client` version skew across 9 MCPs. Mitigation:
+* **R10** — `vibe4fpga-llm-client` version skew across 7 Python MCPs. Mitigation:
   caret-pin + release all MCPs together from a single tag.
 
 ## Rollback

@@ -1,5 +1,5 @@
 .PHONY: install install-uv sync gen-skills gen-skills-check test clean \
-        dev-fpga-project-mcp dev-eda-bridge-mcp dev-waveform-mcp \
+        dev-fpga-project-mcp dev-eda-bridge-mcp \
         dev-instrument-mcp dev-datasheet-mcp dev-quartus-mcp \
         dev-yosys-mcp dev-verify-mcp dev-waveform-mcp-rs
 
@@ -12,7 +12,6 @@ PY_PACKAGES := \
     packages/shared/mcp-testkit \
     packages/mcp-servers/fpga-project-mcp \
     packages/mcp-servers/eda-bridge-mcp \
-    packages/mcp-servers/waveform-mcp \
     packages/mcp-servers/instrument-mcp \
     packages/mcp-servers/datasheet-mcp \
     packages/mcp-servers/quartus-mcp \
@@ -65,9 +64,6 @@ dev-fpga-project-mcp:
 
 dev-eda-bridge-mcp:
 	cd packages/mcp-servers/eda-bridge-mcp && uv run eda-bridge-mcp
-
-dev-waveform-mcp:
-	cd packages/mcp-servers/waveform-mcp && uv run waveform-mcp
 
 dev-waveform-mcp-rs:
 	cd packages/mcp-servers/waveform-mcp-rs && cargo run --release

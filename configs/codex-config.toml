@@ -26,12 +26,9 @@ command = "quartus-mcp"
 command = "verify-mcp"
 # Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, OPENAI_API_KEY, OPENAI_BASE_URL
 
-[mcp_servers.waveform-mcp]
-command = "waveform-mcp"
-# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, OPENAI_API_KEY, OPENAI_BASE_URL
-
 [mcp_servers.waveform-mcp-rs]
 command = "waveform-mcp-rs"
+# Optional env vars: VIBE4FPGA_LLM, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL
 
 [mcp_servers.yosys-mcp]
 command = "yosys-mcp"

@@ -38,9 +38,8 @@ Merge its `mcpServers` object into your host config:
                       "env": { "ANTHROPIC_API_KEY": "${env:ANTHROPIC_API_KEY}" } },
     "eda-bridge":   { "command": "eda-bridge-mcp",
                       "env": { "VIVADO_ROOT": "C:\\Xilinx\\Vivado\\2024.2" } },
-    "waveform":     { "command": "waveform-mcp",
+    "waveform":     { "command": "waveform-mcp-rs",
                       "env": { "ANTHROPIC_API_KEY": "${env:ANTHROPIC_API_KEY}" } },
-    "waveform-rs":  { "command": "waveform-mcp-rs" },
     "instrument":   { "command": "instrument-mcp",
                       "env": { "ANTHROPIC_API_KEY": "${env:ANTHROPIC_API_KEY}" } },
     "datasheet":    { "command": "datasheet-mcp",
@@ -72,7 +71,7 @@ Available skills:
 | `spec2rtl/SKILL.md` | fpga-project-mcp | "spec", "rtl", "verilog from english" |
 | `code_review/SKILL.md` | fpga-project-mcp | "review", "lint", "cdc", "latch" |
 | `timing_fix/SKILL.md` | fpga-project-mcp | "timing", "slack", "wns", "critical path" |
-| `waveform_debug/SKILL.md` | waveform-mcp | "waveform", "vcd", "glitch", "stall" |
+| `waveform_debug/SKILL.md` | waveform-mcp-rs | "waveform", "vcd", "glitch", "stall" |
 | `instrument_analyze/SKILL.md` | instrument-mcp | "oscilloscope", "scope", "diff classify" |
 | `testbench_gen/SKILL.md` | verify-mcp | "testbench", "tb", "sim driver" |
 | `verification/SKILL.md` | verify-mcp | "verify", "score", "verification report" |

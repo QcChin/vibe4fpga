@@ -28,10 +28,6 @@ mcp:
     type: stdio
     command:
       - verify-mcp
-  waveform-mcp:
-    type: stdio
-    command:
-      - waveform-mcp
   waveform-mcp-rs:
     type: stdio
     command:

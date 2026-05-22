@@ -30,7 +30,6 @@ it as YAML if your OpenCode version supports that:
   "mcp": {
     "fpga-project-mcp": { "type": "stdio", "command": ["fpga-project-mcp"] },
     "eda-bridge-mcp":   { "type": "stdio", "command": ["eda-bridge-mcp"] },
-    "waveform-mcp":     { "type": "stdio", "command": ["waveform-mcp"] },
     "waveform-mcp-rs":  { "type": "stdio", "command": ["waveform-mcp-rs"] },
     "instrument-mcp":   { "type": "stdio", "command": ["instrument-mcp"] },
     "datasheet-mcp":    { "type": "stdio", "command": ["datasheet-mcp"],
@@ -57,7 +56,7 @@ repo directly), and OpenCode will surface each skill as a slash command:
 /spec2rtl         → fpga-project-mcp.spec_to_rtl
 /review           → fpga-project-mcp.review_rtl
 /timing           → fpga-project-mcp.suggest_timing_fix
-/debug-wave       → waveform-mcp.debug_waveform
+/debug-wave       → waveform-mcp-rs.debug_waveform
 /analyze-diff     → instrument-mcp.analyze_instrument_diff
 /gen-tb           → verify-mcp.generate_testbench
 /score-verify     → verify-mcp.score_verification

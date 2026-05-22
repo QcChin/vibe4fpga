@@ -116,11 +116,11 @@ Suppose the testbench reported `verdict=fail`. Ask:
 > me which signal misbehaved. Focus on the count and direction signals.
 
 **What happens:**
-* `waveform-mcp.debug_waveform` loads the VCD (via `parse_waveform` →
-  async, fst2vcd-safe thanks to the post-review parser fix)
-* Runs the 5 pure-Python detectors (glitches, X/Z, CDC, AXI handshake,
-  stall timeout)
-* The LLM reasoning layer correlates detector findings with the spec
+* `waveform-mcp-rs.debug_waveform` loads the VCD via the Rust parser
+* Runs the 5 deterministic detectors (glitches, X/Z, CDC, AXI handshake,
+  stall timeout) concurrently on tokio
+* The LLM reasoning layer (built-in Anthropic client) correlates detector
+  findings with the spec — skipped automatically when no anomalies fire
 
 ---
 

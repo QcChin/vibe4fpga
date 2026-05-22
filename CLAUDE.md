@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository shape
 
-MCP-first monorepo: 9 MCP servers (8 Python + 1 Rust) that give agent hosts (Claude Code / Codex CLI / OpenCode) tools for an FPGA workflow — project scanning, spec→RTL, code review, timing fixes, testbench gen, waveform/scope analysis, datasheet RAG, and EDA bridging (Vivado / Quartus / Yosys / Verilator / Icarus). Plus 3 shared Python libs:
+MCP-first monorepo: 8 MCP servers (7 Python + 1 Rust) that give agent hosts (Claude Code / Codex CLI / OpenCode) tools for an FPGA workflow — project scanning, spec→RTL, code review, timing fixes, testbench gen, waveform/scope analysis, datasheet RAG, and EDA bridging (Vivado / Quartus / Yosys / Verilator / Icarus). The Rust MCP `waveform-mcp-rs` absorbed the former Python `waveform-mcp` package in v0.3.0; it now covers VCD/FST parsing, AXI4 decoding, RTL source mapping, and the LLM-backed `debug_waveform` skill (via a built-in Anthropic HTTP client). Plus 3 shared Python libs:
 - `packages/shared/llm-client/` — streaming adapters (`claude` / `gpt-4o` / `deepseek` / `gemini` / `ollama` / `rtlcoder`), selected via `VIBE4FPGA_LLM` + matching API key env var.
 - `packages/shared/platform/` — cross-platform scratch paths, tool discovery, `async run()` that forces UTF-8 in child env and applies `\\?\` long-path prefix on Windows.
 - `packages/shared/mcp-testkit/` — `stdio_server_spawn("<mcp-name>")` fixture for Tier-1 smoke tests (dev-only, not published).
@@ -85,6 +85,6 @@ Inter-package deps are path-editable (`[tool.uv.sources]` → `{ path = "../../s
 
 ## Release
 
-Single-tag release for all 10 published packages (`mcp-testkit` is dev-only) + the Rust crate. Bump versions, `make gen-skills-check && make test`, then `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. Workflow is `.github/workflows/release.yml` — uses PyPI trusted publishing via the `release` GitHub environment; no API tokens to manage. See `docs/releasing.md` for the PyPI pending-publisher setup that has to happen once per package.
+Single-tag release for all 9 published packages (`mcp-testkit` is dev-only) + the Rust crate. Bump versions, `make gen-skills-check && make test`, then `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. Workflow is `.github/workflows/release.yml` — uses PyPI trusted publishing via the `release` GitHub environment; no API tokens to manage. See `docs/releasing.md` for the PyPI pending-publisher setup that has to happen once per package.
 
-Package-name quirk: 8 pre-pivot MCPs publish under their bare name (`fpga-project-mcp`, ...); `verify-mcp` publishes as `vibe4fpga-verify-mcp`. Don't try to "fix" this — it would break existing `uv tool install` users.
+Package-name quirk: 7 pre-pivot Python MCPs publish under their bare name (`fpga-project-mcp`, ...); `verify-mcp` publishes as `vibe4fpga-verify-mcp`. Don't try to "fix" this — it would break existing `uv tool install` users.

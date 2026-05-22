@@ -11,7 +11,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "waveform-mcp-rs-tests"
-version = "0.2.0"
+version = "0.3.0"
 description = "Python-side smoke tests for the Rust waveform-mcp-rs binary."
 requires-python = ">=3.11,<3.13"
 dependencies = []
@@ -20,6 +20,7 @@ dependencies = []
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "pyyaml>=6.0",
     "vibe4fpga-mcp-testkit",
 ]
 

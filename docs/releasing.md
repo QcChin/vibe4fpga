@@ -1,8 +1,11 @@
 # Releasing
 
-All 10 Python packages (3 shared + 9 MCPs — `mcp-testkit` is dev-only and
+All 9 Python packages (3 shared + 7 MCPs — `mcp-testkit` is dev-only and
 not published) plus the Rust MCP ship from a single tag. The workflow
 lives at [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+
+The Python `waveform-mcp` package was absorbed into the Rust `waveform-mcp-rs`
+crate in v0.3.0 — don't add it back to the release matrix.
 
 ## One-time PyPI setup
 
@@ -30,7 +33,6 @@ Package names to register (check each `pyproject.toml` for the exact string):
 | `packages/shared/platform` | `vibe4fpga-platform` |
 | `packages/mcp-servers/fpga-project-mcp` | `fpga-project-mcp` |
 | `packages/mcp-servers/eda-bridge-mcp` | `eda-bridge-mcp` |
-| `packages/mcp-servers/waveform-mcp` | `waveform-mcp` |
 | `packages/mcp-servers/instrument-mcp` | `instrument-mcp` |
 | `packages/mcp-servers/datasheet-mcp` | `datasheet-mcp` |
 | `packages/mcp-servers/quartus-mcp` | `quartus-mcp` |

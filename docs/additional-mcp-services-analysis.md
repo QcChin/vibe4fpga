@@ -2,6 +2,11 @@
 
 > 文档版本: 2026-04-07
 > 适用项目: vibe4fpga (AI 辅助 FPGA 开发 IDE)
+>
+> **注**: 此文档中提到的 `waveform-mcp` 在 v0.3.0 已被吸收合并到 Rust crate
+> `waveform-mcp-rs`，所有 7 个工具 (parse / extract / stats / summarize /
+> decode_axi / map_signal_to_rtl / debug_waveform) 都在 Rust 侧。下文为历史
+> 设计描述，工具能力不变，仅实现语言改为 Rust。
 
 ---
 

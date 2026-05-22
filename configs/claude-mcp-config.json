@@ -22,9 +22,6 @@
     "verify-mcp": {
       "command": "verify-mcp"
     },
-    "waveform-mcp": {
-      "command": "waveform-mcp"
-    },
     "waveform-mcp-rs": {
       "command": "waveform-mcp-rs"
     },
