@@ -21,7 +21,7 @@ async def call_llm(
     system:      str,
     model:       str = "claude",
     temperature: float = 0.3,
-    max_tokens:  int   = 8192,
+    max_tokens:  int   = 16384,
 ) -> str:
     """Non-streaming call that collects all chunks into a single string.
 
@@ -48,13 +48,55 @@ async def call_llm(
 
 
 def parse_json_response(text: str) -> Any:
-    """Extract JSON from an LLM response, tolerating markdown code fences.
+    """Extract JSON from an LLM response, tolerating markdown code fences,
+    surrounding prose, and partial output.
 
-    Accepts both plain JSON and ````json ... ````` / ````` ... ````` fences.
-    Raises :class:`json.JSONDecodeError` on genuinely malformed output so
-    callers can surface a meaningful error to their tool consumer.
+    Looks first for a ```json ... ``` (or plain ``` ... ```) block anywhere in
+    the response, then falls back to scanning for a balanced top-level array
+    or object. Raises :class:`json.JSONDecodeError` only when neither
+    approach yields valid JSON.
     """
+    # 1. Pull the inside of any ``` … ``` fence (works even when wrapped in prose).
+    fenced = re.search(r"```\w*\s*\n?(.*?)\n?```", text, re.DOTALL)
+    if fenced:
+        try:
+            return json.loads(fenced.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+
+    # 2. Scan for a balanced top-level [ ... ] or { ... } and try that.
+    for open_ch, close_ch in (("[", "]"), ("{", "}")):
+        start = text.find(open_ch)
+        if start == -1:
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == open_ch:
+                depth += 1
+            elif ch == close_ch:
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        break
+
+    # 3. Last-resort: strip head/tail fences as the original implementation did.
     cleaned = text.strip()
-    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"^```\w*\s*", "", cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
     return json.loads(cleaned.strip())

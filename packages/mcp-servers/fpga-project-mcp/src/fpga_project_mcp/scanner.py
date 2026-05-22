@@ -13,23 +13,57 @@ from pathlib import Path
 RTL_EXTENSIONS = {".v", ".sv", ".vhd", ".vhdl"}
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
-# module foo #(...) ( or module foo (
-MODULE_DECL_RE = re.compile(
-    r"^\s*module\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\s*[(\n;]",
-    re.MULTILINE,
-)
+# Match module declaration; only the keyword + name. Robust against multi-line
+# `#( parameter [(W-1):0] ... )` blocks that defeat a regex with `[^)]*`.
+MODULE_DECL_RE = re.compile(r"^[ \t]*module\s+(\w+)\b", re.MULTILINE)
+
 # Wire/reg/logic declarations: wire [W-1:0] signal_name
 SIGNAL_DECL_RE = re.compile(
     r"^\s*(?:wire|reg|logic|input|output|inout)\s+"
     r"(?:(?:signed|unsigned)\s+)?(?:\[[^\]]+\]\s+)?(\w+)\s*[;,)]",
     re.MULTILINE,
 )
-# Module instantiation: ModuleName #(...) inst_name (
-# Heuristic: identifier followed by optional #(...) then identifier then (
+# Module instantiation: `<inst_type> [#(...)] <inst_name> (`
+# Anchored on leading whitespace (any indent, tabs OK). Parameter block is
+# pre-stripped by `_strip_inst_param_blocks` before this regex runs.
 MODULE_INST_RE = re.compile(
-    r"^\s{2,}(\w+)\s+(?:#\s*\([^)]*\)\s*)?(\w+)\s*\(",
+    r"^[ \t]+(\w+)\s+(\w+)\s*\(",
     re.MULTILINE,
 )
+
+# Strip Verilog `//` line and `/* ... */` block comments.
+_COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
+
+
+def _strip_comments(text: str) -> str:
+    return _COMMENT_RE.sub(" ", text)
+
+
+def _strip_inst_param_blocks(text: str) -> str:
+    """Erase `#( ... balanced ... )` blocks so the instantiation regex doesn't
+    have to cope with nested parens inside parameter expressions like
+    ``parameter [(WIDTH-1):0]``.
+    """
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "#" and i + 1 < n and text[i + 1] == "(":
+            depth = 1
+            j = i + 2
+            while j < n and depth > 0:
+                c = text[j]
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+                j += 1
+            out.append(" ")  # collapse the whole block to one space
+            i = j
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
 
 # ── Data models ───────────────────────────────────────────────────────────────
 
@@ -70,10 +104,11 @@ def scan(project_path: str) -> ScanResult:
         except OSError:
             continue
 
-        for m in MODULE_DECL_RE.finditer(content):
+        stripped = _strip_comments(content)
+        for m in MODULE_DECL_RE.finditer(stripped):
             mod_name = m.group(1)
-            line_no = content[: m.start()].count("\n") + 1
-            signals = [s.group(1) for s in SIGNAL_DECL_RE.finditer(content)]
+            line_no = stripped[: m.start()].count("\n") + 1
+            signals = [s.group(1) for s in SIGNAL_DECL_RE.finditer(stripped)]
             info = ModuleInfo(
                 name=mod_name,
                 file_path=str(fp),
@@ -89,9 +124,15 @@ def scan(project_path: str) -> ScanResult:
     # Keywords that look like module names but aren't instantiations
     HDL_KEYWORDS = {
         "module", "endmodule", "if", "else", "begin", "end", "for", "while",
-        "always", "initial", "assign", "wire", "reg", "logic", "input",
-        "output", "inout", "parameter", "localparam", "generate", "genvar",
-        "case", "casez", "casex", "function", "task",
+        "always", "always_ff", "always_comb", "always_latch", "initial",
+        "assign", "wire", "reg", "logic", "input", "output", "inout",
+        "parameter", "localparam", "generate", "endgenerate", "genvar",
+        "case", "endcase", "casez", "casex", "function", "endfunction",
+        "task", "endtask", "return", "typedef", "enum", "struct", "union",
+        "package", "endpackage", "import", "export", "interface",
+        "endinterface", "modport", "class", "endclass", "extends",
+        "implements", "virtual", "extern", "automatic", "static", "const",
+        "ref", "default", "defparam", "specify", "endspecify",
     }
 
     for fp in files:
@@ -104,8 +145,10 @@ def scan(project_path: str) -> ScanResult:
         if not parent_name or parent_name not in modules:
             continue
 
+        cleaned = _strip_inst_param_blocks(_strip_comments(content))
+
         seen: set[str] = set()
-        for m in MODULE_INST_RE.finditer(content):
+        for m in MODULE_INST_RE.finditer(cleaned):
             module_type = m.group(1)
             if (
                 module_type in known_modules

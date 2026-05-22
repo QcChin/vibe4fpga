@@ -107,7 +107,14 @@ async def run(
             "summary": f"Timing PASSED: WNS={wns:.3f} ns, TNS={tns:.3f} ns. No fixes needed.",
         }
 
-    violations_found = len(re.findall(r"Slack\s*:\s*-[\d.]+", timing_report))
+    # Match both summary form "Slack (VIOLATED): -2.345ns" and bare "Slack: -X".
+    violations_found = len(
+        re.findall(r"Slack\s*(?:\([^)]*\))?\s*:\s*-[\d.]+", timing_report)
+    )
+    # Fall back to 1 when the report only carries an aggregate WNS without
+    # per-path slack lines — wns<0 already proved there is at least one.
+    if violations_found == 0:
+        violations_found = 1
 
     raw = await call_llm(
         messages=[{

@@ -76,4 +76,7 @@ class ClaudeAdapter(BaseAdapter):
                     yield text
         else:
             response = await self._client.messages.create(**kwargs)
-            yield response.content[0].text
+            for block in response.content:
+                text = getattr(block, "text", None)
+                if text:
+                    yield text

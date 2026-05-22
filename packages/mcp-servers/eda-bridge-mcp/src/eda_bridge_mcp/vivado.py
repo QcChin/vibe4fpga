@@ -28,14 +28,17 @@ create_project -in_memory -part {part}
 {read_cmds}
 synth_design -top {top_module} -part {part} -mode out_of_context
 report_timing_summary -no_header -file timing.rpt
-report_utilization -no_header -file util.rpt
+report_utilization -file util.rpt
 write_checkpoint -force post_synth.dcp
 """
 
 _TIMING_PARSE_RE = re.compile(
     r"WNS\(ns\)\s+([-\d.]+)\s+TNS\(ns\)\s+([-\d.]+)"
 )
-_UTIL_RE = re.compile(r"\|\s+([\w/ ]+?)\s+\|\s+(\d+)\s+\|\s+\d+\s+\|\s+(\d+)\s+\|")
+# Vivado 2025.2 utilization table layout (post-Slice-Logic):
+#   | Site Type | Used | Fixed | Prohibited | Available | Util% |
+# Capture name + Used + Available (skipping Fixed and Prohibited).
+_UTIL_RE = re.compile(r"\|\s+([\w/ ]+?)\s+\|\s+(\d+)\s+\|\s+\d+\s+\|\s+\d+\s+\|\s+(\d+)\s+\|")
 
 
 def _find_vivado() -> Path:
@@ -178,7 +181,13 @@ def parse_utilization_report(report_text: str) -> dict:
 
 
 def parse_errors(stdout: str) -> list[dict]:
-    """Parse Vivado stdout and classify errors by semantic category."""
+    """Parse Vivado stdout and classify errors by semantic category.
+
+    Only lines tagged ``ERROR:`` (or ``CRITICAL WARNING:``) are surfaced —
+    plain warnings like ``WARNING: [Synth 8-6014] latch inferred`` are noise
+    here and would otherwise force ``run_synthesis`` to report ``success=False``
+    on a design that synthesises cleanly.
+    """
     ERROR_PATTERNS = [
         ("Synth 8-439",   "missing_module",    "Check file list; verify module name spelling"),
         ("Synth 8-6014",  "latch_inferred",    "Add default branch to if/case statement"),
@@ -187,15 +196,22 @@ def parse_errors(stdout: str) -> list[dict]:
         ("Impl 41-186",   "congestion_high",   "Resource utilization too high; relax Pblock constraints"),
     ]
     results: list[dict] = []
-    for code, category, suggestion in ERROR_PATTERNS:
-        if code in stdout:
-            results.append({
-                "code":       code,
-                "category":   category,
-                "suggestion": suggestion,
-            })
-    # Also capture raw ERROR lines.
+    seen_codes: set[str] = set()
     for line in stdout.splitlines():
-        if line.startswith("ERROR:"):
-            results.append({"raw": line.strip()})
+        stripped = line.lstrip()
+        if not (stripped.startswith("ERROR:") or stripped.startswith("CRITICAL WARNING:")):
+            continue
+        matched = False
+        for code, category, suggestion in ERROR_PATTERNS:
+            if code in stripped and code not in seen_codes:
+                results.append({
+                    "code":       code,
+                    "category":   category,
+                    "suggestion": suggestion,
+                })
+                seen_codes.add(code)
+                matched = True
+                break
+        if not matched:
+            results.append({"raw": stripped})
     return results

@@ -102,7 +102,7 @@ async def run(
         system=TESTBENCH_SYSTEM,
         model=model or "claude",
         temperature=0.1,
-        max_tokens=8192,
+        max_tokens=16384,
     )
 
     # Strip markdown fences
